@@ -4,13 +4,15 @@
  */
 
 import { speak, stop, getIsSpeaking, getSelectedVoiceLabel } from './services/ttsService.js';
-import { fileToBase64, processImage } from './utils/imageProcessing.js';
-import { visionCompletion, chatCompletion } from './services/regoloApi.js';
+import { fileToBase64, processImage, createDemoPrescriptionDataUrl } from './utils/imageProcessing.js';
+import { visionCompletion, chatCompletion, checkProxyHealth } from './services/regoloApi.js';
 import { scanForMedicines } from './utils/fuzzyMatch.js';
 import { CONFIG } from './config.js';
 import { PROMPTS } from './utils/prompts.js';
 import { normalizeMedication, aggregateCostStats } from './utils/prescriptionHelpers.js';
-import { healthFeedColumns, renderHealthFeedCard } from './data/healthFeed.js';
+import { HEALTH_FEED_ITEMS, renderHealthFeedCard, getProcessingFeedDateLineHtml } from './data/healthFeed.js';
+import { checkInteractions, getSeverityLevel } from './services/interactionService.js';
+import { computeBmi, bmiCategory, PAKISTAN_HELPLINES } from './data/healthTools.js';
 
 // ===== State =====
 let state = {
@@ -19,13 +21,71 @@ let state = {
   imageData: null,
   ocrText: '',
   medications: [],
+  /** Drug interaction hints from LLM when 2+ meds */
   interactions: [],
+  interactionsError: false,
   expandedCards: new Set(),
   /** Drug card index while TTS plays (-1 = idle) */
   speakingIndex: -1,
   ttsSession: 0,
   history: JSON.parse(localStorage.getItem('sehat_history') || '[]'),
 };
+
+/** Cleared when leaving the processing screen */
+let processingFeedIntervalId = null;
+
+const HACKATHON_CREDIT_HTML = `
+  <div class="hackathon-banner" role="note">
+    <span class="hackathon-banner__badge" aria-hidden="true">HEC</span>
+    <div class="hackathon-banner__text">
+      <span class="hackathon-banner__title">Generative AI Training — Hackathon</span>
+      <span class="hackathon-banner__cohort">Cohort 3 · صحت ساتھی اسی مقابلے کے لیے تیار کیا گیا ہے</span>
+    </div>
+  </div>`;
+
+function stopProcessingFeedCarousel() {
+  if (processingFeedIntervalId != null) {
+    clearInterval(processingFeedIntervalId);
+    processingFeedIntervalId = null;
+  }
+}
+
+function pickSixUniqueRandom(deck) {
+  if (!deck.length) return [];
+  const copy = [...deck];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  if (copy.length >= 6) return copy.slice(0, 6);
+  const out = [];
+  while (out.length < 6) out.push(copy[out.length % copy.length]);
+  return out;
+}
+
+/** Rotating bilingual tips — 3 compact cards per column (6 total) until analysis finishes. */
+function startProcessingFeedCarousel() {
+  stopProcessingFeedCarousel();
+  const leftEl = document.getElementById('processingFeedLeft');
+  const rightEl = document.getElementById('processingFeedRight');
+  if (!leftEl || !rightEl) return;
+
+  const deck = HEALTH_FEED_ITEMS;
+  const step = () => {
+    const six = pickSixUniqueRandom(deck);
+    const left = six.slice(0, 3);
+    const right = six.slice(3, 6);
+    leftEl.innerHTML = left.map((item) => renderHealthFeedCard(item, 'compact')).join('');
+    rightEl.innerHTML = right.map((item) => renderHealthFeedCard(item, 'compact')).join('');
+    leftEl.classList.remove('health-feed-swap');
+    rightEl.classList.remove('health-feed-swap');
+    void leftEl.offsetWidth;
+    leftEl.classList.add('health-feed-swap');
+    rightEl.classList.add('health-feed-swap');
+  };
+  step();
+  processingFeedIntervalId = setInterval(step, 8000);
+}
 
 const app = document.getElementById('app');
 
@@ -151,16 +211,34 @@ const ANALYSIS_PHASES = [
 // ===== Render Functions =====
 function render() {
   switch (state.view) {
-    case 'auth': renderAuth(); break;
-    case 'landing': renderLanding(); break;
-    case 'uploading': renderUpload(); break;
-    case 'processing': renderProcessing(); break;
-    case 'results': renderResults(); break;
+    case 'auth':
+      renderAuth();
+      break;
+    case 'landing':
+      renderLanding();
+      break;
+    case 'uploading':
+      renderUpload();
+      break;
+    case 'processing':
+      renderProcessing();
+      break;
+    case 'tools':
+      renderTools();
+      break;
+    case 'results':
+      renderResults();
+      break;
+    default:
+      renderAuth();
+      break;
   }
 }
 
 function renderAuth() {
   app.innerHTML = `
+    <div class="auth-shell">
+      ${HACKATHON_CREDIT_HTML}
     <div class="auth-container auth-container-split">
       <div class="auth-hero" aria-hidden="false">
         <div class="auth-map-stage">
@@ -234,6 +312,7 @@ function renderAuth() {
         </div>
       </div>
     </div>
+    </div>
   `;
   document.getElementById('loginBtn').addEventListener('click', () => {
     state.user = { name: document.getElementById('nameInput').value || 'User' };
@@ -269,7 +348,10 @@ function renderLanding() {
           <div class="feature-card"><div class="icon">💰</div><h3>Cost</h3><p>اندازاً لاگت</p></div>
           <div class="feature-card"><div class="icon">📊</div><h3>Stats</h3><p>مقایسہ</p></div>
         </div>
+    <div class="landing-actions-row">
         <button class="btn btn-primary" id="startBtn" style="padding:1.25rem">📸 نیا نسخہ اسکین کریں — Start scan</button>
+        <button type="button" class="btn btn-secondary" id="toolsBtn" style="padding:1.25rem">🧮 صحت ٹولز — BMI اور ہیلپ لائن</button>
+    </div>
       </section>
       ${renderFooter()}
     </div>
@@ -279,6 +361,11 @@ function renderLanding() {
     state.imageData = null;
     render();
   });
+  document.getElementById('toolsBtn').addEventListener('click', () => {
+    state.view = 'tools';
+    render();
+  });
+  wireHeaderNav();
 }
 
 function renderUpload() {
@@ -318,22 +405,29 @@ function renderUpload() {
 }
 
 function renderProcessing() {
-  const { left, right } = healthFeedColumns();
+  const todayLine = getProcessingFeedDateLineHtml();
   const feedIntro = `
-    <p class="health-feed-intro">
+    ${todayLine}
+    <p class="health-feed-intro health-feed-intro--sidebar">
       <span class="health-feed-intro__ico" aria-hidden="true">📰</span>
-      <span><strong>While you wait</strong> — صحت کے مختصر نکات (معلوماتی)</span>
+      <span><strong>Health tips</strong> — ۳ cards rotate while we analyze</span>
     </p>
-    <p class="health-feed-disclaimer">یہ تجاویز ڈاکٹر کی جگہ نہیں لے سکتیں۔ ذاتی علامات پر ہمیشہ پیشہ ور سے مشورہ کریں۔</p>
+    <p class="health-feed-disclaimer health-feed-disclaimer--sidebar">General info — not medical advice.</p>
   `;
   app.innerHTML = `
     <div class="processing-overlay">
+      <header class="processing-header">
+        <div class="processing-header__brand">
+          <span class="processing-header__logo" aria-hidden="true">${brandLogoSvg(36, 'proc')}</span>
+          <span class="processing-header__title">Sehat Saathi</span>
+          <span class="processing-header__divider" aria-hidden="true"></span>
+          <span class="processing-header__status" dir="rtl">تجزیہ جاری ہے — براہ کرم انتظار کریں</span>
+        </div>
+      </header>
       <div class="processing-layout">
-        <aside  class="health-feed-col health-feed-col--left" aria-label="Health tips">
+        <aside class="health-feed-col health-feed-col--left" aria-label="Health tips">
           ${feedIntro}
-          <div class="health-feed-stack">
-            ${left.map((item) => renderHealthFeedCard(item)).join('')}
-          </div>
+          <div class="health-feed-stack health-feed-stack--rotating" id="processingFeedLeft" aria-live="polite" aria-atomic="false"></div>
         </aside>
         <div class="processing-center">
           <div class="processing-card">
@@ -341,10 +435,12 @@ function renderProcessing() {
               <div class="processing-spinner-glow" aria-hidden="true"></div>
               <div class="processing-spinner" role="status" aria-label="Loading"></div>
             </div>
-            <div class="processing-phase-badge" id="processingPhaseBadge">مرحلہ ۱ از ۳</div>
-            <div class="processing-ur-main" id="processingStep">…</div>
-            <div class="processing-ur-sub" id="processingUrSub"></div>
-            <p class="processing-en-friendly" id="processingText"></p>
+            <div class="processing-card__focus">
+              <div class="processing-phase-badge" id="processingPhaseBadge">مرحلہ ۱ از ۳</div>
+              <div class="processing-ur-main" id="processingStep">…</div>
+              <div class="processing-ur-sub" id="processingUrSub"></div>
+              <p class="processing-en-friendly" id="processingText"></p>
+            </div>
             <div class="processing-progress" aria-hidden="true">
               <div class="processing-progress-fill" id="processingProgressFill" style="width:26%"></div>
             </div>
@@ -374,19 +470,18 @@ function renderProcessing() {
           </div>
         </div>
         <aside class="health-feed-col health-feed-col--right" aria-label="More health tips">
-          <p class="health-feed-intro health-feed-intro--right">
+          <p class="health-feed-intro health-feed-intro--right health-feed-intro--sidebar">
             <span class="health-feed-intro__ico" aria-hidden="true">🏥</span>
-            <span><strong>Public health notes</strong> — عوامی صحت</span>
+            <span><strong>Pakistan focus</strong> — season &amp; public health</span>
           </p>
-          <p class="health-feed-disclaimer health-feed-disclaimer--compact">Information only — not a diagnosis.</p>
-          <div class="health-feed-stack">
-            ${right.map((item) => renderHealthFeedCard(item)).join('')}
-          </div>
+          <p class="health-feed-disclaimer health-feed-disclaimer--compact health-feed-disclaimer--sidebar">Information only.</p>
+          <div class="health-feed-stack health-feed-stack--rotating" id="processingFeedRight" aria-live="polite" aria-atomic="false"></div>
         </aside>
       </div>
     </div>
   `;
   setProcessingPhase(1);
+  startProcessingFeedCarousel();
 }
 
 function renderResults() {
@@ -422,6 +517,7 @@ function renderResults() {
           <button type="button" class="btn btn-secondary" id="newScanBtn" style="width:auto">New Scan</button>
         </div>
         ${state.medications.length ? renderResultsDashboard(state.medications, costAgg) : ''}
+        ${renderInteractionsPanel()}
         <div class="drug-cards drug-cards--results">
           ${emptyAnalysis}
           ${state.medications.map((med, i) => renderDrugCard(med, i)).join('')}
@@ -435,35 +531,162 @@ function renderResults() {
     </div>
   `;
   setupResultEvents();
+  wireHeaderNav();
+}
+
+function renderInteractionsPanel() {
+  if (state.medications.length < 2) {
+    return `
+      <div class="interactions-card interactions-card--muted">
+        <h3 class="interactions-card__title">دوائیوں کا باہمی اثر — Interaction check</h3>
+        <p class="interactions-card__body">ایک سے زیادہ دوا ہونے پر یہاں خودکار چیک چلتا ہے۔ اس نتیجے میں دوا کم ہے — پھر بھی <strong>فارمسسٹ</strong> سے مشورہ ضروری ہے۔</p>
+      </div>`;
+  }
+  if (state.interactionsError) {
+    return `
+      <div class="interactions-card interactions-card--warn">
+        <h3 class="interactions-card__title">Interaction check</h3>
+        <p class="interactions-card__body">چیک مکمل نہیں ہو سکا۔ براہ کرم دواؤں کی ملائش <strong>ڈاکٹر یا فارمسسٹ</strong> سے کروائیں۔</p>
+      </div>`;
+  }
+  const items = state.interactions || [];
+  if (items.length === 0) {
+    return `
+      <div class="interactions-card interactions-card--ok">
+        <h3 class="interactions-card__title">دوائیوں کا باہمی اثر — AI چیک</h3>
+        <p class="interactions-card__body">ماڈل کو آپ کی فہرست میں کوئی واضح سنگین ٹکراؤ نظر نہیں آیا۔ <strong>حتمی یقین کے لیے ہمیشہ فارمسسٹ</strong> سے تصدیق کریں — یہ صرف معلوماتی ہے۔</p>
+      </div>`;
+  }
+  const rows = items
+    .map((it) => {
+      const sev = getSeverityLevel(it.severity);
+      return `
+      <li class="interactions-item" style="border-left:4px solid ${sev.color};background:${sev.bg}">
+        <div class="interactions-item__head">
+          <span class="interactions-item__pair">${escapeHtml(it.pair)}</span>
+          <span class="interactions-item__sev" style="color:${sev.color}">${sev.icon} ${escapeHtml(sev.label)}</span>
+        </div>
+        <p class="interactions-item__en">${escapeHtml(it.note_en)}</p>
+        <p class="interactions-item__ur" dir="rtl">${escapeHtml(it.note_ur)}</p>
+      </li>`;
+    })
+    .join('');
+  return `
+    <div class="interactions-card">
+      <h3 class="interactions-card__title">دوائیوں کا باہمی اثر — AI چیک</h3>
+      <p class="interactions-card__hint">تعلیمی۔ دوا روکنے یا بدلنے سے پہلے <strong>ڈاکٹر یا فارمسسٹ</strong> سے پوچھیں۔</p>
+      <ul class="interactions-list">${rows}</ul>
+    </div>`;
+}
+
+function renderTools() {
+  const helplines = PAKISTAN_HELPLINES.map(
+    (h) =>
+      `<tr><td><strong>${escapeHtml(h.dial)}</strong></td><td>${escapeHtml(h.en)}</td><td dir="rtl">${escapeHtml(h.ur)}</td></tr>`
+  ).join('');
+  app.innerHTML = `
+    ${renderHeader()}
+    <div class="container tools-page">
+      <section class="tools-section">
+        <div class="tools-head">
+          <h2 class="tools-title">صحت کے ٹولز</h2>
+          <p class="tools-lead">BMI کیلکولیٹر اور کچھ عوامی ہیلپ لائن نمبر — نسخے کے علاوہ مفید معلومات۔</p>
+        </div>
+        <div class="tools-grid">
+          <div class="tools-card">
+            <h3 class="tools-card__h">BMI — وزن اور قد</h3>
+            <p class="tools-muted">بالغوں کے لیے سادہ BMI؛ بچوں، حمل، یا بیماری پر ڈاکٹر سے مشورہ کریں۔</p>
+            <div class="bmi-form">
+              <div class="form-group">
+                <label for="bmiHeightCm">قد (سینٹی میٹر)</label>
+                <input type="number" class="form-input" id="bmiHeightCm" min="50" max="280" placeholder="مثلاً 170" />
+              </div>
+              <div class="form-group">
+                <label for="bmiWeightKg">وزن (کلوگرام)</label>
+                <input type="number" class="form-input" id="bmiWeightKg" min="10" max="400" placeholder="مثلاً 70" />
+              </div>
+              <button type="button" class="btn btn-primary" id="bmiCalcBtn">حساب / Calculate BMI</button>
+            </div>
+            <div class="bmi-result" id="bmiResult" role="status" aria-live="polite"></div>
+          </div>
+          <div class="tools-card">
+            <h3 class="tools-card__h">ہیلپ لائن (تصدیق کریں)</h3>
+            <p class="tools-muted">شہر اور وقت کے مطابق نمبر بدل سکتے ہیں — سرکاری ذرائع سے چیک کریں۔</p>
+            <div class="table-wrap">
+              <table class="helpline-table">
+                <thead><tr><th>نمبر</th><th>English</th><th class="helpline-th-ur">اردو</th></tr></thead>
+                <tbody>${helplines}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="tools-actions">
+          <button type="button" class="btn btn-primary" id="toolsToScanBtn">📸 نسخہ اسکین</button>
+          <button type="button" class="btn btn-secondary" id="toolsToHomeBtn">🏠 ہوم</button>
+        </div>
+        <p class="tools-page-disclaimer">⚠️ یہ صفحہ طبی تشخیص نہیں۔ ہنگامی صورت میں قریبی ہسپتال سے رجوع کریں۔</p>
+      </section>
+      ${renderFooter()}
+    </div>
+  `;
+  wireHeaderNav();
+  document.getElementById('toolsToHomeBtn').addEventListener('click', () => {
+    state.view = 'landing';
+    render();
+  });
+  document.getElementById('toolsToScanBtn').addEventListener('click', () => {
+    state.view = 'uploading';
+    state.imageData = null;
+    render();
+  });
+  document.getElementById('bmiCalcBtn').addEventListener('click', () => {
+    const h = parseFloat(String(document.getElementById('bmiHeightCm').value).replace(',', '.'));
+    const w = parseFloat(String(document.getElementById('bmiWeightKg').value).replace(',', '.'));
+    const bmi = computeBmi(w, h);
+    const cat = bmiCategory(bmi);
+    const el = document.getElementById('bmiResult');
+    if (bmi == null || !cat) {
+      el.textContent = 'درست قد (سینٹی میٹر) اور وزن (کلوگرام) درج کریں۔';
+      return;
+    }
+    el.innerHTML = `<strong>BMI: ${escapeHtml(String(bmi))}</strong> — ${escapeHtml(cat.en)} / <span dir="rtl">${escapeHtml(cat.ur)}</span>`;
+  });
 }
 
 function renderResultsDashboard(medications, costAgg) {
   const n = medications.length;
   const totalLine =
-    costAgg.hasNumeric && costAgg.lowSum > 0
-      ? `≈ PKR ${costAgg.lowSum.toLocaleString('en-PK')} – ${costAgg.highSum.toLocaleString('en-PK')} (سب طے شدہ دوائوں کا اندازاً کل)`
-      : 'مکمل کل کے لیے ہر دوا کی قیمت نیچے دیکھیں — شہر اور فارمیسی کے مطابق فرق ہوتا ہے۔';
+    costAgg.hasNumeric && costAgg.totalSpot > 0
+      ? `≈ PKR ${costAgg.totalSpot.toLocaleString('en-PK')} (سب دوائوں کا تقریبی ایک کل — ہر دوا کی الگ رقم ذیل میں)`
+      : 'مکمل کل کے لیے ہر دوا کی قیمت نیچے دیکھیں — یہ ماڈل کا مارکیٹ تخمینہ ہے، لائیو ریٹ نہیں۔';
 
   const bars =
     costAgg.rows.length > 0
       ? costAgg.rows
           .map((r) => {
-            const pct = Math.max(8, Math.round((r.mid / costAgg.maxMid) * 100));
-            const range =
-              r.low === r.high
-                ? `≈ ${r.low.toLocaleString('en-PK')}`
-                : `${r.low.toLocaleString('en-PK')} – ${r.high.toLocaleString('en-PK')}`;
+            if (r.noNumeric) {
+              return `
+            <div class="cost-bar-row cost-bar-row--textonly">
+              <div class="cost-bar-label">${escapeHtml(r.label)}</div>
+              <div class="cost-bar-track cost-bar-track--placeholder" aria-hidden="true">
+                <div class="cost-bar-fill cost-bar-fill--placeholder" style="width:12%"></div>
+              </div>
+              <div class="cost-bar-value cost-bar-value--text">${escapeHtml(r.costText)}</div>
+            </div>`;
+            }
+            const pct = Math.max(8, Math.round((r.spot / costAgg.maxSpot) * 100));
+            const line = `≈ ${r.spot.toLocaleString('en-PK')} PKR`;
             return `
             <div class="cost-bar-row">
               <div class="cost-bar-label">${escapeHtml(r.label)}</div>
               <div class="cost-bar-track">
                 <div class="cost-bar-fill" style="width:${pct}%"></div>
               </div>
-              <div class="cost-bar-value">${range} PKR</div>
+              <div class="cost-bar-value">${line}</div>
             </div>`;
           })
           .join('')
-      : `<p class="cost-bar-empty">اعداد الشمار تب بنتے ہیں جب ماڈل PKR رینج دے — نہ ملیں تو ہر دوا کے نیچے متن والی قیمت دیکھیں۔</p>`;
+      : `<p class="cost-bar-empty">جب ماڈل PKR نکال سکے تو یہاں تقریبی ایک قیمت دکھائی جائے گی — نہ ملیں تو دوائی کارڈ پر متن دیکھیں۔</p>`;
 
   return `
     <div class="results-dashboard">
@@ -483,13 +706,13 @@ function renderResultsDashboard(medications, costAgg) {
           <div class="stat-label">دوائیں / Medicines</div>
         </div>
         <div class="stat-tile stat-tile-wide">
-          <div class="stat-label" style="margin-bottom:0.35rem">کل لاگت (انڈیکٹیو) / Total cost hint</div>
+          <div class="stat-label" style="margin-bottom:0.35rem">کل لاگت (تقریبی) / Estimated total (PKR)</div>
           <div class="stat-sub">${escapeHtml(totalLine)}</div>
         </div>
       </div>
       <div class="dashboard-chart-card">
-        <div class="dashboard-chart-title">فی دوا لاگت (موازنہ) — Cost by medicine</div>
-        <p class="dashboard-chart-hint">بار لمبائی ہر دوا کی اندازاً درمیانی قیمت سے — آسانی کے لیے، مارکیٹ میں حتمی نہیں۔</p>
+        <div class="dashboard-chart-title">فی دوا تقریبی قیمت — Cost per medicine (indicative)</div>
+        <p class="dashboard-chart-hint">یہ <strong>واحد ≈ PKR</strong> تخمینہ ہے (ماڈل کا عام پاکستانی مارکیٹ علم) — فارمیسی کا لائیو/حتمی ریٹ نہیں۔ براہ کرم خریدنے سے پہلے تصدیق کریں۔</p>
         <div class="cost-bar-list">${bars}</div>
       </div>
     </div>
@@ -604,20 +827,38 @@ function renderDrugCard(med, index) {
 }
 
 function renderHeader() {
-  return `<header class="app-header" style="padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; background:var(--card-bg)">
+  const showTools = state.user && state.view !== 'auth' && state.view !== 'processing';
+  return `<header class="app-header" style="padding:1rem 2rem; display:flex; justify-content:space-between; align-items:center; background:var(--card-bg); flex-wrap:wrap; gap:0.75rem">
     <div class="logo-group">
       <div class="logo-mark logo-mark--nav">${brandLogoSvg(44, 'nav')}</div>
       <h1 style="font-size:1.2rem">Sehat Saathi</h1>
     </div>
-    <div style="font-size:0.9rem">${state.user?.name}</div>
+    <div class="app-header__right" style="display:flex; flex-wrap:wrap; align-items:center; gap:0.65rem 1rem">
+      ${
+        showTools
+          ? `<button type="button" class="btn btn-secondary header-tools-btn" id="navToolsBtn" title="BMI اور ہیلپ لائن">🧮 صحت ٹولز</button>`
+          : ''
+      }
+      <span class="header-hackathon-pill" title="Built for HEC Generative AI Training Hackathon, Cohort 3">HEC GenAI · Cohort 3 Hackathon</span>
+      <div style="font-size:0.9rem">${escapeHtml(state.user?.name ?? '')}</div>
+    </div>
   </header>`;
 }
 
 function renderFooter() {
-  return `<footer style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.8rem">Sehat Saathi — HEC ASPIREPK</footer>`;
+  return `<footer style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.8rem">Sehat Saathi — HEC Generative AI Training · Cohort 3 Hackathon</footer>`;
 }
 
 // ===== Events =====
+function wireHeaderNav() {
+  const btn = document.getElementById('navToolsBtn');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    state.view = 'tools';
+    render();
+  });
+}
+
 function setupUploadEvents() {
   const fileInput = document.getElementById('fileInput');
   const uploadArea = document.getElementById('uploadArea');
@@ -631,15 +872,20 @@ function setupUploadEvents() {
       pickFile();
     }
   });
-  fileInput.addEventListener('change', async e => {
-    if (e.target.files[0]) {
+  fileInput.addEventListener('change', async (e) => {
+    if (!e.target.files[0]) return;
+    try {
       const base64 = await fileToBase64(e.target.files[0]);
       state.imageData = await processImage(base64);
       render();
+    } catch (err) {
+      console.error('Upload process failed:', err);
+      alert('Could not use this image: ' + err.message);
     }
   });
   const analyzeBtn = document.getElementById('analyzeBtn');
   if (analyzeBtn) analyzeBtn.addEventListener('click', () => startAnalysis());
+  wireHeaderNav();
 }
 
 function setupResultEvents() {
@@ -692,17 +938,16 @@ function setupResultEvents() {
     state.view = 'landing';
     state.imageData = null;
     state.medications = [];
+    state.interactions = [];
+    state.interactionsError = false;
     render();
   });
 }
 
 async function loadDemo() {
   try {
-    const res = await fetch('/sample_prescription.png');
-    if (!res.ok) throw new Error(`Could not load demo image (HTTP ${res.status}).`);
-    const blob = await res.blob();
-    const base64 = await fileToBase64(blob);
-    state.imageData = await processImage(base64);
+    const raw = createDemoPrescriptionDataUrl();
+    state.imageData = await processImage(raw);
     render();
   } catch (error) {
     console.error('Demo load failed:', error);
@@ -722,7 +967,8 @@ function isLikelyDateOnlySnippet(rawText) {
 /** Drop rows where snippet is only a visit date (model sometimes latches onto corner dates). */
 function filterSpuriousMedications(meds) {
   return meds.filter((m) => {
-    const snippet = String(m.raw_text || m.raw_line || m.name || m.brand_name || '');
+    const snippet = String(m.raw_text || m.raw_line || m.rx_line || m.name || m.brand_name || '').trim();
+    if (!snippet) return false;
     return !isLikelyDateOnlySnippet(snippet);
   });
 }
@@ -792,10 +1038,21 @@ function extractMedicationsJson(rawModelOutput) {
  * ULTRA-PERMISSIVE PIPELINE: NO REFUSALS ALLOWED
  */
 async function startAnalysis() {
+  stopProcessingFeedCarousel();
+  state.interactions = [];
+  state.interactionsError = false;
   state.view = 'processing';
   render();
 
   try {
+    const proxyOk = await checkProxyHealth();
+    if (!proxyOk.ok) {
+      throw new Error(
+        proxyOk.error ||
+          'API proxy is not reachable. Use npm run dev:all and ensure .env has REGOLO_API_KEY for scans.'
+      );
+    }
+
     // PASS 1: Specialist OCR (DeepSeek)
     const rawOcr = await visionCompletion(
       CONFIG.OCR_MODEL,
@@ -828,20 +1085,22 @@ async function startAnalysis() {
         { role: 'system', content: PROMPTS.VISION_ANALYSIS },
         {
           role: 'user',
-          content: `Prescription reports for ONE image:
+          content: `Prescription reports for ONE image (strings below are JSON-encoded for safety):
 
-      REPORT A (OCR transcription): "${rawOcr}"
+REPORT_A_OCR (transcription): ${JSON.stringify(rawOcr)}
 
-      REPORT B (Visual medicine list): "${vlmReasoning}"
+REPORT_B_VLM (visual list): ${JSON.stringify(vlmReasoning)}
 
-      SYSTEM CANDIDATES (fuzzy matches from Pakistani medicine DB — spelling hints ONLY): 
+SYSTEM CANDIDATES (fuzzy matches from Pakistani medicine DB — spelling hints ONLY): 
       ${fuzzyCandidates.length > 0 ? fuzzyCandidates.join(', ') : 'None.'}
 
       YOUR JOB:
       1. COUNT distinct medicines described in A and/or B — output that many JSON objects (typically 4–8). Never merge multiple drugs into one object.
       2. Each medicine must be grounded in A/B text only — do not invent unrelated drugs.
-      3. Use SYSTEM CANDIDATES only to fix spelling when they clearly match a line in A/B.
-      4. Each array element must match the system schema: name, summary, purpose, usage, timing, cost, alternatives (array), warning, confidence.
+      3. Use SYSTEM CANDIDATES only to fix spelling for the **same** line in A/B — never swap in a different medicine.
+      4. Each object MUST include **rx_line** (quote from A or B) and **name** = brand/product on the paper (not generic-only when a brand is visible).
+      5. **cost**: exactly ONE approximate PKR figure per medicine (e.g. "≈ PKR 450") from typical Pakistani retail knowledge — never a low–high range; if unknown use "Cost not available".
+      6. Schema keys: name, rx_line, summary, purpose, usage, timing, cost, alternatives, warning, confidence.
       Return ONLY the JSON array as specified in the system message.`,
         },
       ],
@@ -856,6 +1115,19 @@ async function startAnalysis() {
     state.medications = list.map((m, i) => normalizeMedication(m, i));
     state.ocrText = `OCR: ${rawOcr}\nVLM: ${vlmReasoning}`;
     state.expandedCards = new Set(state.medications.map((_, i) => i));
+
+    state.interactions = [];
+    state.interactionsError = false;
+    if (state.medications.length >= 2) {
+      try {
+        state.interactions = await checkInteractions(state.medications);
+      } catch (intErr) {
+        console.error('Interaction check failed:', intErr);
+        state.interactions = [];
+        state.interactionsError = true;
+      }
+    }
+
     state.view = 'results';
     render();
   } catch (error) {
@@ -863,6 +1135,8 @@ async function startAnalysis() {
     alert('Analysis failed: ' + error.message);
     state.view = 'uploading';
     render();
+  } finally {
+    stopProcessingFeedCarousel();
   }
 }
 

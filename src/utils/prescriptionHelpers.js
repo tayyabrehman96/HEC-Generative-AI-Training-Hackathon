@@ -96,7 +96,7 @@ export function normalizeMedication(m, index) {
   const usage = String(raw.usage || raw.usage_instructions || '').trim() || '—';
 
   const timing = String(raw.timing || '').trim() || '—';
-  const rawLine = String(raw.raw_text || raw.raw_line || '').trim();
+  const rawLine = String(raw.raw_text || raw.rx_line || raw.raw_line || '').trim();
   const salt = String(raw.generic_name || '').trim();
 
   const fallback = explainScheduleFromCode(`${rawLine} ${timing} ${purpose}`);
@@ -121,15 +121,26 @@ export function normalizeMedication(m, index) {
   const warning = String(raw.warning || raw.prescriber_note_ur || '').trim();
   const confidence = String(raw.confidence || 'Medium').trim();
 
-  const priceNote =
-    costStr ||
-    (isNewShape ? 'Cost not available' : 'اندازاً — پاکستانی مارکیٹ میں قیمتیں مختلف ہوتی ہیں؛ فارمیسی سے تصدیق کریں۔');
-
   const costLow = raw.estimated_cost_low_pkr != null ? Number(raw.estimated_cost_low_pkr) : null;
   const costHigh = raw.estimated_cost_high_pkr != null ? Number(raw.estimated_cost_high_pkr) : null;
-  const fromText = extractPkrRange(priceNote);
+  const fromText = extractPkrRange(costStr);
   const low = Number.isFinite(costLow) ? costLow : fromText.low;
   const high = Number.isFinite(costHigh) ? costHigh : fromText.high;
+
+  let spotPkr = null;
+  if (low != null && high != null) spotPkr = Math.round((low + high) / 2);
+  else if (low != null) spotPkr = Math.round(low);
+  else if (high != null) spotPkr = Math.round(high);
+
+  const priceHintUr =
+    ' اندازاً عام فارمیسی فروخت (ماڈل کا مارکیٹ علم)؛ لائیو/حتمی قیمت نہیں — خریدنے سے پہلے فارمسسٹ سے تصدیق کریں۔';
+
+  let priceNote = costStr.trim();
+  if (spotPkr != null && spotPkr > 0) {
+    priceNote = `≈ PKR ${spotPkr.toLocaleString('en-PK')}.${priceHintUr}`;
+  } else if (!priceNote) {
+    priceNote = isNewShape ? 'Cost not available' : 'اندازاً — پاکستانی مارکیٹ میں قیمتیں مختلف ہوتی ہیں؛ فارمیسی سے تصدیق کریں۔';
+  }
 
   const courseNote = String(raw.course_cost_note_pkr || '').trim();
 
@@ -150,17 +161,21 @@ export function normalizeMedication(m, index) {
     course_cost_note_pkr: courseNote,
     estimated_cost_low_pkr: low,
     estimated_cost_high_pkr: high,
+    estimated_spot_pkr: spotPkr,
     prescriber_note_ur: warning,
   };
 }
 
 export function aggregateCostStats(medications) {
-  let lowSum = 0;
-  let highSum = 0;
+  let totalSpot = 0;
   let count = 0;
   const rows = [];
 
   medications.forEach((med, i) => {
+    let spot =
+      med.estimated_spot_pkr != null && Number.isFinite(Number(med.estimated_spot_pkr))
+        ? Math.round(Number(med.estimated_spot_pkr))
+        : null;
     let low = med.estimated_cost_low_pkr;
     let high = med.estimated_cost_high_pkr;
     if (low == null && high == null) {
@@ -168,22 +183,41 @@ export function aggregateCostStats(medications) {
       low = r.low;
       high = r.high ?? r.low;
     }
-    if (low != null || high != null) {
-      const L = low ?? high ?? 0;
-      const H = high ?? low ?? 0;
-      lowSum += L;
-      highSum += H;
+    if (spot == null && (low != null || high != null)) {
+      if (low != null && high != null) spot = Math.round((low + high) / 2);
+      else spot = Math.round(low ?? high ?? 0);
+    }
+
+    const hasNumeric = spot != null && spot > 0;
+    const costText = String(med.cost_estimate_pkr || '').trim() || 'Cost not available';
+
+    if (hasNumeric) {
+      totalSpot += spot;
       count++;
-      rows.push({ index: i, label: med.brand_name, low: L, high: H, mid: (L + H) / 2 });
+      rows.push({
+        index: i,
+        label: med.brand_name,
+        spot,
+        noNumeric: false,
+        costText,
+      });
+    } else {
+      rows.push({
+        index: i,
+        label: med.brand_name,
+        spot: null,
+        noNumeric: true,
+        costText,
+      });
     }
   });
 
-  const maxMid = rows.length ? Math.max(...rows.map((r) => r.mid), 1) : 1;
+  const spots = rows.filter((r) => r.spot != null).map((r) => r.spot);
+  const maxSpot = spots.length ? Math.max(...spots, 1) : 1;
   return {
     rows,
-    lowSum,
-    highSum,
+    totalSpot,
     hasNumeric: count > 0,
-    maxMid,
+    maxSpot,
   };
 }

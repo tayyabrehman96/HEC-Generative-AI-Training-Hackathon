@@ -23,7 +23,7 @@ export const CONFIG = {
     max_tokens: 12288,
   },
   MEDICAL_CONSOLIDATION_SETTINGS: {
-    temperature: 0.12,
+    temperature: 0.07,
     max_tokens: 12288,
   },
   NER_SETTINGS: {

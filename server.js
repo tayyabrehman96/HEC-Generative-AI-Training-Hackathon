@@ -15,6 +15,11 @@ const PORT = 3001;
 app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 
+/** Liveness for the browser — confirms Vite → Express wiring without calling Regolo. */
+app.get('/proxy/health', (_req, res) => {
+  res.json({ ok: true, service: 'sehat-saathi-proxy', regoloConfigured: Boolean(REGOLO_API_KEY) });
+});
+
 app.post('/proxy/chat/completions', async (req, res) => {
   const { body } = req.body ?? {};
 

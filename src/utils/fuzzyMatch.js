@@ -30,28 +30,34 @@ export function getLevenshteinDistance(a, b) {
  * Find the best medicine matches for a given string
  * @param {string} input - The messy OCR text
  * @param {number} limit - Max matches to return
+ * @param {{ looseLen?: boolean }} [opts] - looseLen: relax length filter for Tab./Inj. fragments
  * @returns {Array} List of matches with scores
  */
-export function findBestMatches(input, limit = 3) {
+export function findBestMatches(input, limit = 3, opts = {}) {
   if (!input || input.length < 3) return [];
   const inputLower = input.toLowerCase();
+  const loose = opts.looseLen === true;
+  const maxLenDiff = loose ? 12 : 5;
 
   const results = [];
   for (const med of MEDICINE_DB) {
     const brandLower = med.brand.toLowerCase();
-    
+
     // Optimization 1: Exact match short-circuit
     if (inputLower === brandLower) {
       return [{ ...med, score: 0 }];
     }
 
-    // Optimization 2: Length-based skip (if length difference is too large, skip)
-    if (Math.abs(input.length - med.brand.length) > 5) continue;
+    if (!loose && Math.abs(input.length - med.brand.length) > maxLenDiff) continue;
 
-    const brandScore = getLevenshteinDistance(input, med.brand);
-    const normalized = brandScore / Math.max(input.length, med.brand.length);
-    
-    if (normalized < 0.4) { // Tightened threshold for better candidates
+    const brandScore = getLevenshteinDistance(
+      input.replace(/-/g, ''),
+      med.brand.replace(/-/g, '')
+    );
+    const denom = Math.max(input.length, med.brand.length);
+    const normalized = brandScore / denom;
+
+    if (normalized < 0.42) {
       results.push({ ...med, score: normalized });
     }
   }
@@ -66,11 +72,38 @@ export function findBestMatches(input, limit = 3) {
  * Scan a block of text and find all potential medicine candidates
  */
 export function scanForMedicines(text) {
-  const words = text.split(/[\s,.;:\n]+/).filter(w => w.length >= 4);
   const candidates = new Set();
+  const tryAdd = (fragment) => {
+    const s = String(fragment || '')
+      .replace(/^[(\[]\d+[)\]]\s*/, '')
+      .trim();
+    if (s.length < 3) return;
+    const firstTok = s.split(/[\s/]+/)[0];
+    for (const probe of [s.slice(0, 32), firstTok]) {
+      if (probe.length < 3) continue;
+      const matches = findBestMatches(probe, 1);
+      let m = matches;
+      if (!m.length && probe.length >= 4) {
+        m = findBestMatches(probe, 1, { looseLen: true });
+      }
+      if (m.length > 0) {
+        candidates.add(`${m[0].brand} (${m[0].generic})`);
+      }
+    }
+  };
 
-  words.forEach(word => {
-    const matches = findBestMatches(word, 1);
+  const t = String(text || '');
+  const lineRx = /(?:^|\n)\s*(?:\d+\.\s*)?(?:[-–—]\s*)?(?:Tab\.|Inj\.|Cap\.|Syp\.|Susp\.)\s*([^\n]+)/gi;
+  let lm;
+  while ((lm = lineRx.exec(t)) !== null) {
+    tryAdd(lm[1]);
+  }
+
+  const words = t.split(/[\s,.;:\n()[\]{}]+/).filter((w) => w.length >= 4);
+  words.forEach((word) => {
+    const w = word.replace(/^\d+[.)]+$/, '');
+    if (w.length < 4) return;
+    const matches = findBestMatches(w, 1);
     if (matches.length > 0) {
       candidates.add(`${matches[0].brand} (${matches[0].generic})`);
     }

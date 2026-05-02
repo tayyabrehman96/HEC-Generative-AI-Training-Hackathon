@@ -16,8 +16,8 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
-    port: 3000,
-    strictPort: true,
+    port: 5173,
+    strictPort: false,
     open: true,
     proxy: proxyToBackend,
     // Avoid full dev-server restart when only server-side secrets in .env change (was killing concurrently + proxy).

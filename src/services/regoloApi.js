@@ -5,6 +5,32 @@
 
 import { CONFIG } from '../config.js';
 
+/**
+ * Verify Vite dev proxy can reach Express (does not call Regolo).
+ */
+export async function checkProxyHealth() {
+  const url = `${CONFIG.API_BASE_URL}/health`;
+  try {
+    const response = await fetch(url, { method: 'GET' });
+    if (!response.ok) {
+      return {
+        ok: false,
+        error:
+          response.status === 404
+            ? 'Proxy returned 404 on /proxy/health — stop old Node processes and run npm run dev:all again.'
+            : `Proxy health check failed (HTTP ${response.status}).`,
+      };
+    }
+    await response.json().catch(() => ({}));
+    return { ok: true };
+  } catch (err) {
+    return {
+      ok: false,
+      error: `Cannot reach ${url}. Run npm run dev:all (or npm run proxy + npm run dev) and keep port 3001 free.`,
+    };
+  }
+}
+
 /** Some models (e.g. Qwen with reasoning) put text in reasoning_content while content stays empty — breaks downstream prompts if ignored. */
 function textFromAssistantMessage(message) {
   if (!message || typeof message !== 'object') return '';
@@ -66,7 +92,9 @@ export async function chatCompletion(model, messages, settings = {}) {
     const detail =
       typeof data.error === 'string'
         ? data.error
-        : data.snippet ?? JSON.stringify(data);
+        : typeof data.error?.message === 'string'
+          ? data.error.message
+          : data.snippet ?? JSON.stringify(data);
     throw new Error(`Regolo API Error (${response.status}): ${detail}`);
   }
 

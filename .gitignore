@@ -1,4 +1,4 @@
-.env
+# .env is tracked for this hackathon repo (rotate keys if repo becomes public)
 .env.local
 .env.*.local
 node_modules/
