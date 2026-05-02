@@ -2,11 +2,6 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
-import path from 'path';
-import fs from 'fs';
-import { fileURLToPath } from 'url';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const REGOLO_API_KEY = process.env.REGOLO_API_KEY?.trim();
 if (!REGOLO_API_KEY) {
@@ -15,11 +10,7 @@ if (!REGOLO_API_KEY) {
 }
 
 const app = express();
-const PORT = Number(process.env.PORT) || 3001;
-const distPath = path.join(__dirname, 'dist');
-const proxyOnly = process.env.PROXY_ONLY === '1';
-const serveFrontend =
-  !proxyOnly && fs.existsSync(distPath) && process.env.NODE_ENV === 'production';
+const PORT = 3001;
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
@@ -58,7 +49,7 @@ app.post('/proxy/chat/completions', async (req, res) => {
       });
     }
 
-    console.log('[Proxy] Response Content (start):', JSON.stringify(data).substring(0, 500));
+    console.log(`[Proxy] Response Content (start):`, JSON.stringify(data).substring(0, 500));
 
     res.status(response.status).json(data);
   } catch (error) {
@@ -67,19 +58,6 @@ app.post('/proxy/chat/completions', async (req, res) => {
   }
 });
 
-if (serveFrontend) {
-  app.use(express.static(distPath));
-  app.use((req, res, next) => {
-    if (req.method !== 'GET' && req.method !== 'HEAD') {
-      return next();
-    }
-    res.sendFile(path.join(distPath, 'index.html'), (err) => {
-      if (err) next(err);
-    });
-  });
-}
-
 app.listen(PORT, '0.0.0.0', () => {
-  const mode = serveFrontend ? `UI + proxy (dist/, NODE_ENV=${process.env.NODE_ENV})` : `proxy only (PROXY_ONLY=${proxyOnly ? '1' : 'unset'})`;
-  console.log(`Sehat Saathi — ${mode} — http://0.0.0.0:${PORT}`);
+  console.log(`Sehat Saathi Proxy Server running at http://127.0.0.1:${PORT}`);
 });

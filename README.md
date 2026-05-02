@@ -9,7 +9,7 @@
 > **HEC Generative AI Training — Hackathon submission**  
 > Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)
 
-**On this page:** [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers) · **[Public URL (tunnel)](./PUBLIC_LINK.md)** · **[Public URL (hosted)](./DEPLOY_PUBLIC_DEMO.md)**
+**On this page:** [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers)
 
 ---
 
@@ -390,11 +390,8 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 ```
 ├── index.html
 ├── package.json
-├── server.js             # Proxy + production: serves dist/ when NODE_ENV=production
-├── render.yaml           # Optional: Render blueprint
-├── vite.config.js        # dev server + /proxy rewrite
-├── DEPLOY_PUBLIC_DEMO.md # hosted public URL (free tier)
-├── PUBLIC_LINK.md       # tunnel public URL while PC runs
+├── server.js              # API proxy (REGOLO_API_KEY)
+├── vite.config.js         # dev server + /proxy rewrite
 ├── public/
 │   └── pakistan-map.svg   # literacy visual (hero)
 ├── src/
@@ -429,8 +426,6 @@ npm run dev:all
 
 - **App:** [http://localhost:3000](http://localhost:3000)  
 - **Proxy:** [http://127.0.0.1:3001](http://127.0.0.1:3001)  
-- **Public URL — temporary tunnel:** **[PUBLIC_LINK.md](./PUBLIC_LINK.md)** (`ngrok` / Cloudflare Quick Tunnel while your PC runs).
-- **Public URL — free hosted demo:** **[DEPLOY_PUBLIC_DEMO.md](./DEPLOY_PUBLIC_DEMO.md)** (e.g. Render `*.onrender.com` after `npm run build`).
 
 `dev:all` runs **Vite + Express** together (`concurrently`).
 
@@ -439,11 +434,9 @@ Other scripts:
 | Script | Purpose |
 |--------|---------|
 | `npm run dev` | Front-end only |
-| `npm run proxy` | Express proxy only (with `PROXY_ONLY=1`, for dev next to Vite) |
+| `npm run proxy` | Proxy only |
 | `npm run build` | Production build to `dist/` |
 | `npm run preview` | Preview build (with proxy config in `vite.config.js`) |
-| `npm start` | Production server (`NODE_ENV=production`): serves `dist/` + `/proxy` on `PORT` |
-| `npm run demo:serve` | Build then run production stack locally on port **3001** |
 
 ### Environment variables
 
