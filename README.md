@@ -9,6 +9,8 @@
 > **HEC Generative AI Training — Hackathon submission**  
 > Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)
 
+**On this page:** [Summary](#executive-summary-for-judges) · [Architecture](#architecture-high-level) · [Block diagram](#block-diagram-layers) │ [Data & DB](#data-schema--database-important-for-judges) · [Schema](#medication-json-contract-api-output--one-element-of-the-array) · [Setup](#local-setup-judges--reviewers)
+
 ---
 
 ## Executive summary (for judges)
@@ -42,36 +44,137 @@ The system is **not a doctor**: it **explains what is already written** and flag
 
 ---
 
-## Architecture
+## Architecture (high level)
+
+**End-to-end data flow:** browser uploads an image → **Express proxy** forwards OpenAI-style requests to **Regolo** → three model passes run (OCR, VLM, consolidation) → **JSON array** is rendered in the UI (cards, dashboard, TTS).
 
 ```mermaid
- %%{init: {'theme': 'dark'}}%%
 flowchart LR
-  subgraph client [Browser — Vite SPA]
-    UI[Upload / Results / TTS]
+  subgraph client["Browser (Vite SPA)"]
+    UI["Upload / Results / TTS"]
   end
-  subgraph proxy [Express — localhost:3001]
-    P["/proxy/chat/completions"]
+  subgraph proxy["Express proxy :3001"]
+    EP["POST /proxy/chat/completions"]
   end
-  subgraph upstream [Regolo AI]
-    OCR["Pass 1 — DeepSeek OCR"]
-    VLM["Pass 2 — Qwen VLM"]
-    LLM["Pass 3 — Llama 3.3 70B"]
+  subgraph cloud["Regolo AI API"]
+    M1["Pass 1: DeepSeek OCR"]
+    M2["Pass 2: Qwen VLM"]
+    M3["Pass 3: Llama 3.3 70B"]
   end
-  UI -->|image + prompts| P
-  P --> OCR
-  P --> VLM
-  P --> LLM
-  LLM -->|JSON medicines[]| UI
+  UI -->|"image + prompts"| EP
+  EP --> M1
+  EP --> M2
+  EP --> M3
+  M3 -->|"medication JSON array"| UI
 ```
 
-| Pass | Model (configurable) | Role |
-|------|----------------------|------|
-| 1 | `deepseek-ocr-2` | Full-page transcription; preserve every drug line |
-| 2 | `qwen3.5-122b` | Exhaustive visual medicine inventory from the image |
-| 3 | `Llama-3.3-70B-Instruct` | Merge A+B + fuzzy DB hints → **strict JSON array** per medicine |
+| Pass | Model | Role |
+|------|--------|------|
+| 1 | `deepseek-ocr-2` | Full-page transcription; every drug line preserved |
+| 2 | `qwen3.5-122b` | Visual inventory of medicines on the image |
+| 3 | `Llama-3.3-70B-Instruct` | Merge reports + fuzzy hints → **one JSON object per medicine** |
 
-Fuzzy matching against a small **Pakistani medicine hint list** corrects OCR spelling **only** when it aligns with visible text (`src/utils/fuzzyMatch.js`).
+---
+
+## Block diagram (layers)
+
+*Layers communicate over HTTPS (browser) and HTTP (dev: Vite → Express).*
+
+```mermaid
+flowchart TB
+  subgraph presentation["Presentation layer"]
+    A["index.html + src/main.js"]
+    B["src/style.css"]
+  end
+  subgraph application["Application / domain (client)"]
+    C["Image pipeline: imageProcessing.js"]
+    D["API client: regoloApi.js"]
+    E["Normalization: prescriptionHelpers.js"]
+    F["Prompts: prompts.js"]
+  end
+  subgraph reference["Reference data (client-side, static)"]
+    G["medicineDb.js → MEDICINE_DB"]
+    H["fuzzyMatch.js"]
+  end
+  subgraph infrastructure["Infrastructure"]
+    I["server.js → Regolo proxy"]
+    J["vite.config.js → /proxy rewrite"]
+  end
+  subgraph external["External services"]
+    K["api.regolo.ai"]
+  end
+  presentation --> application
+  application --> reference
+  application --> I
+  I --> K
+  J -->|dev| I
+```
+
+---
+
+## Data, schema & “database” (important for judges)
+
+This hackathon MVP is **serverless for patient data**: there is **no PostgreSQL / Mongo / SQL** in the repo. Storage is intentionally minimal:
+
+| Store | Type | Location | What it holds |
+|--------|------|----------|----------------|
+| **Medicine hint DB** | Static **reference** data (file-backed) | `src/data/medicineDb.js` | Brand ↔ generic pairs for **fuzzy OCR spelling hints** (not a full drug formulary). |
+| **Scan history (optional)** | **Browser** key–value | `localStorage` key `sehat_history` | Reserved / future use; parsed history not wired to full UI in current build. |
+| **Session state** | In-memory | `main.js` `state` object | Current image, OCR text, medications[], UI flags (lost on refresh). |
+| **Secrets** | Environment | `.env` (not in Git) | `REGOLO_API_KEY` on the machine running `server.js`. |
+| **Model responses** | Transient | RAM / network | JSON from Llama pass drives the results screen. |
+
+**Future (production):** add a real **DB** (e.g. **PostgreSQL**) for `users`, `prescription_scans`, `medication_rows`, `audit_log`; encrypt PHI; keep API keys server-side only. The **logical** shape below matches what you would persist per scan.
+
+### Logical ER-style model (target for a future SQL DB)
+
+```mermaid
+erDiagram
+  USER ||--o{ PRESCRIPTION_SCAN : uploads
+  PRESCRIPTION_SCAN ||--|{ MEDICATION_ROW : contains
+  USER {
+    uuid id
+    string display_name
+  }
+  PRESCRIPTION_SCAN {
+    uuid id
+    timestamp created_at
+    string ocr_report_a
+    string vlm_report_b
+  }
+  MEDICATION_ROW {
+    uuid id
+    string brand_name
+    string generic_name
+    string raw_text
+    string purpose
+    string schedule_explained_ur
+    int cost_low_pkr
+    int cost_high_pkr
+  }
+```
+
+*MVP:* only the **MEDICATION_ROW**-like object exists **in the browser** after each successful run (see JSON contract below).
+
+### Medication JSON contract (API output — one element of the array)
+
+Fields are produced by the consolidation pass and normalized in `prescriptionHelpers.js`:
+
+| Field | Type | Description |
+|--------|------|-------------|
+| `brand_name` | string | Readable brand from prescription |
+| `generic_name` | string | Salt / class |
+| `raw_text` | string | Snippet from OCR/VLM for that line |
+| `purpose` | string | Urdu / Roman Urdu |
+| `usage_instructions` | string | How to take |
+| `schedule_explained_ur` | string | Plain explanation of `1-0-1` style codes |
+| `timing` | string | Short schedule line |
+| `alternatives` | string | Suggested local alternates |
+| `cost_estimate_pkr` | string | Human-readable PKR band |
+| `estimated_cost_low_pkr` | number \| null | Parsed low |
+| `estimated_cost_high_pkr` | number \| null | Parsed high |
+| `course_cost_note_pkr` | string | Optional course total note |
+| `prescriber_note_ur` | string | Safety reminder |
 
 ---
 
@@ -182,9 +285,10 @@ Other scripts:
 
 ## Future work
 
+- **PostgreSQL (or similar)** for durable `PRESCRIPTION_SCAN` + `MEDICATION_ROW` with encryption at rest  
 - Offline/low-bandwidth mode / SMS summary  
 - Official **drug–interaction** API integration (requires vetted medical data)  
-- User accounts & scan history (encrypted)  
+- User accounts tied to scan history  
 - Regional price feeds (API) instead of model-estimated bands  
 
 ---
