@@ -3,13 +3,14 @@
  * AI-Powered Prescription Intelligence for Pakistan
  */
 
-import { speak } from './services/ttsService.js';
+import { speak, stop, getIsSpeaking, getSelectedVoiceLabel } from './services/ttsService.js';
 import { fileToBase64, processImage } from './utils/imageProcessing.js';
 import { visionCompletion, chatCompletion } from './services/regoloApi.js';
 import { scanForMedicines } from './utils/fuzzyMatch.js';
 import { CONFIG } from './config.js';
 import { PROMPTS } from './utils/prompts.js';
 import { normalizeMedication, aggregateCostStats } from './utils/prescriptionHelpers.js';
+import { healthFeedColumns, renderHealthFeedCard } from './data/healthFeed.js';
 
 // ===== State =====
 let state = {
@@ -20,7 +21,9 @@ let state = {
   medications: [],
   interactions: [],
   expandedCards: new Set(),
+  /** Drug card index while TTS plays (-1 = idle) */
   speakingIndex: -1,
+  ttsSession: 0,
   history: JSON.parse(localStorage.getItem('sehat_history') || '[]'),
 };
 
@@ -32,15 +35,92 @@ function brandLogoSvg(size, gradId) {
   return `<svg class="brand-logo-svg" width="${s}" height="${s}" viewBox="0 0 64 64" aria-hidden="true" focusable="false" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="brand-grad-${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
-        <stop offset="0%" stop-color="#34d399"/>
-        <stop offset="42%" stop-color="#10b981"/>
-        <stop offset="100%" stop-color="#6366f1"/>
+        <stop offset="0%" stop-color="#3b82f6"/>
+        <stop offset="45%" stop-color="#059669"/>
+        <stop offset="100%" stop-color="#0d9488"/>
       </linearGradient>
     </defs>
     <rect width="64" height="64" rx="17" fill="url(#brand-grad-${gradId})"/>
-    <path d="M32 15v34M15 32h34" stroke="#f8fafc" stroke-width="3.5" stroke-linecap="round"/>
-    <circle cx="32" cy="32" r="10" fill="none" stroke="rgba(248,250,252,0.32)" stroke-width="2"/>
+    <path d="M32 15v34M15 32h34" stroke="#ffffff" stroke-width="3.5" stroke-linecap="round"/>
+    <circle cx="32" cy="32" r="10" fill="none" stroke="rgba(255,255,255,0.45)" stroke-width="2"/>
   </svg>`;
+}
+
+/** Friendly “Pakistani voice assistant” avatar (illustration — modest dupatta, brand colours). */
+function voiceAgentAvatarSvg(active) {
+  const pulse = active ? ' voice-agent-avatar__svg--speaking' : '';
+  return `
+  <div class="voice-agent-avatar${active ? ' voice-agent-avatar--active' : ''}" aria-hidden="true">
+    <svg class="voice-agent-avatar__svg${pulse}" viewBox="0 0 72 72" width="72" height="72" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="va-skin" x1="0%" y1="0%" x2="0%" y2="100%">
+          <stop offset="0%" stop-color="#fcebd7"/>
+          <stop offset="100%" stop-color="#e8c4a8"/>
+        </linearGradient>
+        <linearGradient id="va-dup" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" stop-color="#2563eb"/>
+          <stop offset="100%" stop-color="#059669"/>
+        </linearGradient>
+      </defs>
+      <circle cx="36" cy="36" r="34" fill="#f8fafc" stroke="#e2e8f0" stroke-width="1.5"/>
+      <path d="M12 48 Q36 22 60 48 L58 56 Q36 40 14 56 Z" fill="url(#va-dup)" opacity="0.95"/>
+      <ellipse cx="36" cy="34" rx="16" ry="18" fill="url(#va-skin)"/>
+      <path d="M22 30 Q36 16 50 30 Q46 22 36 20 Q26 22 22 30" fill="#1e3a5f"/>
+      <ellipse cx="36" cy="34" rx="15" ry="8" fill="none" stroke="rgba(37,99,235,0.25)" stroke-width="1"/>
+      <circle cx="30" cy="32" r="1.8" fill="#334155"/>
+      <circle cx="42" cy="32" r="1.8" fill="#334155"/>
+      <path d="M32 40 Q36 43 40 40" stroke="#c2410c" stroke-width="1.2" fill="none" stroke-linecap="round"/>
+      <ellipse cx="36" cy="38" rx="5" ry="2.2" fill="rgba(220,38,38,0.12)"/>
+    </svg>
+  </div>`;
+}
+
+/** Urdu-first prompt for TTS — avoids English lead-in that triggers British voices. */
+function buildMedicationTtsText(med, index) {
+  const summary = med.card_summary ? `خلاصہ: ${med.card_summary}۔` : '';
+  const sched = med.schedule_explained_ur && med.schedule_explained_ur !== med.timing
+    ? `خوراک کی وضاحت: ${med.schedule_explained_ur}۔`
+    : '';
+  const parts = [
+    `دوا نمبر ${index + 1}۔`,
+    med.brand_name ? `نام: ${med.brand_name}۔` : '',
+    med.generic_name ? `عام نام: ${med.generic_name}۔` : '',
+    summary,
+    med.purpose && med.purpose !== '—' ? `مقصد: ${med.purpose}۔` : '',
+    med.usage_instructions && med.usage_instructions !== '—' ? `استعمال: ${med.usage_instructions}۔` : '',
+    med.timing && med.timing !== '—' ? `وقت: ${med.timing}۔` : '',
+    sched,
+    med.cost_estimate_pkr ? `لاگت: ${med.cost_estimate_pkr}۔` : '',
+    med.alternatives && med.alternatives !== '—' ? `متبادل: ${med.alternatives}۔` : '',
+    med.prescriber_note_ur ? `احتیاط: ${med.prescriber_note_ur}۔` : '',
+    med.confidence ? `یقین کی سطح: ${med.confidence}۔` : '',
+  ];
+  return parts.filter(Boolean).join(' ');
+}
+
+function renderVoiceAgentDock() {
+  const active = state.speakingIndex >= 0;
+  const med = active ? state.medications[state.speakingIndex] : null;
+  const voiceHint = getSelectedVoiceLabel();
+  return `
+    <div class="voice-agent-dock" role="status" aria-live="polite">
+      ${voiceAgentAvatarSvg(active)}
+      <div class="voice-agent-dock__text">
+        <div class="voice-agent-dock__title">صحت ساتھی <span class="voice-agent-dock__en">— voice guide</span></div>
+        <div class="voice-agent-dock__sub">
+          ${
+            active && med
+              ? `سن رہی ہوں: <strong dir="auto">${escapeHtml(med.brand_name)}</strong>`
+              : 'کسی دوا پر <strong>سنیں 🔊</strong> دبائیں — اردو میں وضاحت سنائی جائے گی۔'
+          }
+        </div>
+        ${
+          voiceHint
+            ? `<div class="voice-agent-dock__voice" title="System TTS voice">آواز: ${escapeHtml(voiceHint)}</div>`
+            : `<div class="voice-agent-dock__voice voice-agent-dock__voice--warn">بہتر اردو آواز: Windows میں <strong>Urdu (Pakistan)</strong> speech pack انسٹال کریں — پھر Edge/Chrome استعمال کریں۔</div>`
+        }
+      </div>
+    </div>`;
 }
 
 /** Human-friendly copy for each AI pass (Urdu + simple English — no jargon). */
@@ -238,43 +318,71 @@ function renderUpload() {
 }
 
 function renderProcessing() {
+  const { left, right } = healthFeedColumns();
+  const feedIntro = `
+    <p class="health-feed-intro">
+      <span class="health-feed-intro__ico" aria-hidden="true">📰</span>
+      <span><strong>While you wait</strong> — صحت کے مختصر نکات (معلوماتی)</span>
+    </p>
+    <p class="health-feed-disclaimer">یہ تجاویز ڈاکٹر کی جگہ نہیں لے سکتیں۔ ذاتی علامات پر ہمیشہ پیشہ ور سے مشورہ کریں۔</p>
+  `;
   app.innerHTML = `
     <div class="processing-overlay">
-      <div class="processing-card">
-        <div class="processing-spinner-wrap">
-          <div class="processing-spinner-glow" aria-hidden="true"></div>
-          <div class="processing-spinner" role="status" aria-label="Loading"></div>
+      <div class="processing-layout">
+        <aside  class="health-feed-col health-feed-col--left" aria-label="Health tips">
+          ${feedIntro}
+          <div class="health-feed-stack">
+            ${left.map((item) => renderHealthFeedCard(item)).join('')}
+          </div>
+        </aside>
+        <div class="processing-center">
+          <div class="processing-card">
+            <div class="processing-spinner-wrap">
+              <div class="processing-spinner-glow" aria-hidden="true"></div>
+              <div class="processing-spinner" role="status" aria-label="Loading"></div>
+            </div>
+            <div class="processing-phase-badge" id="processingPhaseBadge">مرحلہ ۱ از ۳</div>
+            <div class="processing-ur-main" id="processingStep">…</div>
+            <div class="processing-ur-sub" id="processingUrSub"></div>
+            <p class="processing-en-friendly" id="processingText"></p>
+            <div class="processing-progress" aria-hidden="true">
+              <div class="processing-progress-fill" id="processingProgressFill" style="width:26%"></div>
+            </div>
+            <ul class="processing-step-list" aria-label="آپ کا نسخہ کیسے پڑھا جاتا ہے">
+              <li class="processing-step-item" id="processingStepMark1">
+                <span class="step-ico">📝</span>
+                <span>
+                  <strong>۱ — تحریر پڑھنا</strong>
+                  <span class="step-line-en">Reading handwriting from your photo</span>
+                </span>
+              </li>
+              <li class="processing-step-item" id="processingStepMark2">
+                <span class="step-ico">💊</span>
+                <span>
+                  <strong>۲ — دوائیں پہچاننا</strong>
+                  <span class="step-line-en">Finding medicine names & doses on the paper</span>
+                </span>
+              </li>
+              <li class="processing-step-item" id="processingStepMark3">
+                <span class="step-ico">📋</span>
+                <span>
+                  <strong>۳ — آسان ہدایات</strong>
+                  <span class="step-line-en">Writing purpose, usage & timing for you</span>
+                </span>
+              </li>
+            </ul>
+          </div>
         </div>
-        <div class="processing-phase-badge" id="processingPhaseBadge">مرحلہ ۱ از ۳</div>
-        <div class="processing-ur-main" id="processingStep">…</div>
-        <div class="processing-ur-sub" id="processingUrSub"></div>
-        <p class="processing-en-friendly" id="processingText"></p>
-        <div class="processing-progress" aria-hidden="true">
-          <div class="processing-progress-fill" id="processingProgressFill" style="width:26%"></div>
-        </div>
-        <ul class="processing-step-list" aria-label="آپ کا نسخہ کیسے پڑھا جاتا ہے">
-          <li class="processing-step-item" id="processingStepMark1">
-            <span class="step-ico">📝</span>
-            <span>
-              <strong>۱ — تحریر پڑھنا</strong>
-              <span class="step-line-en">Reading handwriting from your photo</span>
-            </span>
-          </li>
-          <li class="processing-step-item" id="processingStepMark2">
-            <span class="step-ico">💊</span>
-            <span>
-              <strong>۲ — دوائیں پہچاننا</strong>
-              <span class="step-line-en">Finding medicine names & doses on the paper</span>
-            </span>
-          </li>
-          <li class="processing-step-item" id="processingStepMark3">
-            <span class="step-ico">📋</span>
-            <span>
-              <strong>۳ — آسان ہدایات</strong>
-              <span class="step-line-en">Writing purpose, usage & timing for you</span>
-            </span>
-          </li>
-        </ul>
+        <aside class="health-feed-col health-feed-col--right" aria-label="More health tips">
+          <p class="health-feed-intro health-feed-intro--right">
+            <span class="health-feed-intro__ico" aria-hidden="true">🏥</span>
+            <span><strong>Public health notes</strong> — عوامی صحت</span>
+          </p>
+          <p class="health-feed-disclaimer health-feed-disclaimer--compact">Information only — not a diagnosis.</p>
+          <div class="health-feed-stack">
+            ${right.map((item) => renderHealthFeedCard(item)).join('')}
+          </div>
+        </aside>
       </div>
     </div>
   `;
@@ -314,11 +422,12 @@ function renderResults() {
           <button type="button" class="btn btn-secondary" id="newScanBtn" style="width:auto">New Scan</button>
         </div>
         ${state.medications.length ? renderResultsDashboard(state.medications, costAgg) : ''}
-        <div class="drug-cards">
+        <div class="drug-cards drug-cards--results">
           ${emptyAnalysis}
           ${state.medications.map((med, i) => renderDrugCard(med, i)).join('')}
         </div>
-        <div class="disclaimer" style="margin-top:3rem; padding:1.5rem; background:rgba(239,68,68,0.05); border-radius:12px; font-size:0.85rem">
+        ${renderVoiceAgentDock()}
+        <div class="disclaimer results-disclaimer">
           ⚠️ <strong>Disclaimer:</strong> This AI analysis is for information only. Always consult a real doctor or pharmacist.
         </div>
       </section>
@@ -387,66 +496,107 @@ function renderResultsDashboard(medications, costAgg) {
   `;
 }
 
+function confidencePillClass(conf) {
+  const c = String(conf || 'Medium').toLowerCase();
+  if (c === 'high') return 'confidence-pill confidence-pill--high';
+  if (c === 'low') return 'confidence-pill confidence-pill--low';
+  return 'confidence-pill confidence-pill--med';
+}
+
 function renderDrugCard(med, index) {
   const isOpen = state.expandedCards.has(index);
   const sched = String(med.schedule_explained_ur || '').trim();
-  const schedBlock =
-    sched && sched !== '—'
-      ? `
+  const timingStr = String(med.timing || '').trim();
+  const showSchedBox = sched && sched !== '—' && sched !== timingStr;
+
+  const schedBlock = showSchedBox
+    ? `
           <div class="analysis-item schedule-breakdown">
-            <div style="color:var(--text-muted); font-size:0.8rem">وقت کی وضاحت (1-0-1 وغیرہ) — Schedule decoded</div>
-            <div style="font-family:var(--font-urdu); font-size:1.05rem; line-height:1.75">${escapeHtml(sched)}</div>
+            <div class="analysis-label">خوراک کی تفصیل — Schedule (decoded)</div>
+            <div class="analysis-body analysis-body--urdu">${escapeHtml(sched)}</div>
           </div>`
-      : '';
+    : '';
+
   const costExtra = med.course_cost_note_pkr
     ? `<div class="cost-course-note">${escapeHtml(med.course_cost_note_pkr)}</div>`
     : '';
-  const prescNote = med.prescriber_note_ur
-    ? `<div class="prescriber-note">${escapeHtml(med.prescriber_note_ur)}</div>`
+
+  const warningBlock = med.prescriber_note_ur
+    ? `<div class="analysis-item analysis-item--warning">
+          <div class="analysis-label">⚠️ Safety — احتیاط</div>
+          <div class="analysis-body">${escapeHtml(med.prescriber_note_ur)}</div>
+        </div>`
     : '';
+
+  const summaryLine = String(med.card_summary || '').trim();
+  const genericLine = String(med.generic_name || '').trim();
+  const subtitle = summaryLine || genericLine;
+  const truncated =
+    subtitle.length > 180 ? `${subtitle.slice(0, 177)}…` : subtitle;
+
+  const summaryBlock = summaryLine
+    ? `<div class="analysis-item med-summary-block">
+         <div class="analysis-label">Summary — خلاصہ</div>
+         <div class="analysis-body analysis-body--mixed">${escapeHtml(summaryLine)}</div>
+       </div>`
+    : '';
+
+  const altItems = Array.isArray(med.alternatives_list) && med.alternatives_list.length > 0;
+  const altBody = altItems
+    ? `<ul class="med-alt-list">${med.alternatives_list.map((a) => `<li>${escapeHtml(a)}</li>`).join('')}</ul>`
+    : `<div class="analysis-body">${escapeHtml(med.alternatives)}</div>`;
+
+  const rawBlock =
+    med.raw_text && String(med.raw_text).trim() && med.raw_text !== '—'
+      ? `<div class="analysis-item med-raw-block">
+           <div class="analysis-label">Prescription line — نسخے کی سطر</div>
+           <div class="analysis-body analysis-body--quote">"${escapeHtml(med.raw_text)}"</div>
+         </div>`
+      : '';
 
   return `
     <div class="drug-card drug-card-enter" style="animation-delay:${index * 0.06}s">
-      <div class="drug-card-header" data-toggle="${index}" style="padding:1.5rem; background:var(--glass)">
+      <div class="drug-card-header" data-toggle="${index}">
         <div class="drug-info">
           <div class="drug-number">${index + 1}</div>
-          <div>
-            <div class="drug-name">${escapeHtml(med.brand_name)}</div>
-            <div class="drug-generic">${escapeHtml(med.generic_name)}</div>
+          <div class="drug-heading">
+            <div class="drug-name-row">
+              <div class="drug-name">${escapeHtml(med.brand_name)}</div>
+              <span class="${confidencePillClass(med.confidence)}">${escapeHtml(med.confidence || 'Medium')}</span>
+            </div>
+            ${subtitle ? `<div class="drug-subtitle">${escapeHtml(truncated)}</div>` : ''}
           </div>
         </div>
-        <button class="btn-icon speak-btn" data-speak="${index}" style="background:none; border:none; font-size:1.5rem; cursor:pointer">🔊</button>
+        <button type="button" class="btn-icon speak-btn${state.speakingIndex === index ? ' speak-btn--active' : ''}" data-speak="${index}" aria-label="سنیں — Listen" title="سنیں / Listen">${state.speakingIndex === index ? '⏹️' : '🔊'}</button>
       </div>
-      
-      <div class="drug-card-body" style="display: ${isOpen ? 'block' : 'none'}; padding:1.5rem; border-top:1px solid var(--border)">
-        <div class="analysis-grid" style="display:grid; gap:1.25rem">
+
+      <div class="drug-card-body" style="display: ${isOpen ? 'block' : 'none'}">
+        <div class="analysis-grid">
+          ${rawBlock}
+          ${summaryBlock}
           <div class="analysis-item">
-            <div style="color:var(--text-muted); font-size:0.8rem">1. RAW TEXT (اصل تحریر)</div>
-            <div style="font-weight:500; color:var(--primary)">"${escapeHtml(med.raw_text)}"</div>
+            <div class="analysis-label">Purpose — مقصد</div>
+            <div class="analysis-body analysis-body--urdu">${escapeHtml(med.purpose)}</div>
           </div>
           <div class="analysis-item">
-            <div style="color:var(--text-muted); font-size:0.8rem">2. PURPOSE (مقصد)</div>
-            <div style="font-family:var(--font-urdu); font-size:1.1rem">${escapeHtml(med.purpose)}</div>
+            <div class="analysis-label">Usage — استعمال</div>
+            <div class="analysis-body analysis-body--urdu">${escapeHtml(med.usage_instructions)}</div>
           </div>
           <div class="analysis-item">
-            <div style="color:var(--text-muted); font-size:0.8rem">3. USAGE (طریقہ استعمال)</div>
-            <div style="font-family:var(--font-urdu); font-size:1.1rem">${escapeHtml(med.usage_instructions)}</div>
+            <div class="analysis-label">Timing — وقت</div>
+            <div class="analysis-body">${escapeHtml(med.timing)}</div>
           </div>
           ${schedBlock}
-          <div class="analysis-item">
-            <div style="color:var(--text-muted); font-size:0.8rem">4. TIMING (وقت)</div>
-            <div style="font-weight:600">${escapeHtml(med.timing)}</div>
-          </div>
           <div class="analysis-item cost-item">
-            <div style="color:var(--text-muted); font-size:0.8rem">5. لاگت / Cost (PK — اندازاً)</div>
-            <div style="font-family:var(--font-urdu); font-size:1.05rem; line-height:1.6">${escapeHtml(med.cost_estimate_pkr)}</div>
+            <div class="analysis-label">Cost (PKR) — لاگت</div>
+            <div class="analysis-body analysis-body--urdu">${escapeHtml(med.cost_estimate_pkr)}</div>
             ${costExtra}
           </div>
-          <div class="analysis-item" style="background:rgba(16,185,129,0.05); padding:1rem; border-radius:8px">
-            <div style="color:var(--text-muted); font-size:0.8rem">6. ALTERNATIVES (متبادل ادویات)</div>
-            <div style="font-weight:600; color:var(--secondary)">${escapeHtml(med.alternatives)}</div>
+          <div class="analysis-item med-alternatives-block">
+            <div class="analysis-label">Alternatives — متبادل</div>
+            ${altBody}
           </div>
-          ${prescNote ? `<div class="analysis-item prescriber-item">${prescNote}</div>` : ''}
+          ${warningBlock}
         </div>
       </div>
     </div>
@@ -505,16 +655,40 @@ function setupResultEvents() {
   document.querySelectorAll('.speak-btn').forEach(btn => {
     btn.addEventListener('click', e => {
       e.stopPropagation();
-      const idx = parseInt(btn.dataset.speak);
+      const idx = parseInt(btn.dataset.speak, 10);
+      if (Number.isNaN(idx)) return;
       const med = state.medications[idx];
-      const sched = med.schedule_explained_ur ? ` Schedule: ${med.schedule_explained_ur}` : '';
-      const cost = med.cost_estimate_pkr ? ` Cost: ${med.cost_estimate_pkr}` : '';
-      const text = `Medicine: ${med.brand_name}. Purpose: ${med.purpose}. Usage: ${med.usage_instructions}.${sched} Timing: ${med.timing}.${cost}`;
-      speak(text);
+      if (!med) return;
+
+      if (state.speakingIndex === idx && getIsSpeaking()) {
+        stop();
+        state.ttsSession += 1;
+        state.speakingIndex = -1;
+        render();
+        return;
+      }
+
+      const text = buildMedicationTtsText(med, idx);
+      state.ttsSession += 1;
+      const session = state.ttsSession;
+      state.speakingIndex = idx;
+      render();
+
+      speak(text, {
+        onEnd: () => {
+          if (session === state.ttsSession) {
+            state.speakingIndex = -1;
+            render();
+          }
+        },
+      });
     });
   });
 
   document.getElementById('newScanBtn').addEventListener('click', () => {
+    stop();
+    state.ttsSession += 1;
+    state.speakingIndex = -1;
     state.view = 'landing';
     state.imageData = null;
     state.medications = [];
@@ -545,8 +719,12 @@ function isLikelyDateOnlySnippet(rawText) {
   return /^\d{1,2}\s*[\/\-.]\s*\d{1,2}(\s*[\/\-.]\s*\d{1,4})?$/.test(t);
 }
 
+/** Drop rows where snippet is only a visit date (model sometimes latches onto corner dates). */
 function filterSpuriousMedications(meds) {
-  return meds.filter((m) => !isLikelyDateOnlySnippet(m.raw_text));
+  return meds.filter((m) => {
+    const snippet = String(m.raw_text || m.raw_line || m.name || m.brand_name || '');
+    return !isLikelyDateOnlySnippet(snippet);
+  });
 }
 
 /** First top-level JSON array substring with bracket/brace-aware scanning (avoids greedy-regex mangling). */
@@ -661,9 +839,9 @@ async function startAnalysis() {
 
       YOUR JOB:
       1. COUNT distinct medicines described in A and/or B — output that many JSON objects (typically 4–8). Never merge multiple drugs into one object.
-      2. Each raw_text MUST copy the drug-specific line from A or B (brand + dose). Never use only a calendar date as raw_text.
-      3. Only include medicines grounded in A/B text — do not invent unrelated drugs.
-      4. Use SYSTEM CANDIDATES only to fix spelling when they clearly match a line in A/B.
+      2. Each medicine must be grounded in A/B text only — do not invent unrelated drugs.
+      3. Use SYSTEM CANDIDATES only to fix spelling when they clearly match a line in A/B.
+      4. Each array element must match the system schema: name, summary, purpose, usage, timing, cost, alternatives (array), warning, confidence.
       Return ONLY the JSON array as specified in the system message.`,
         },
       ],

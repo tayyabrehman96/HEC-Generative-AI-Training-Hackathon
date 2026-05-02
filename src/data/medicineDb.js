@@ -1,6 +1,7 @@
 /**
- * Sehat Saathi — Pakistani Medicine Database
- * Top 100+ most common brands and generics in Pakistan
+ * Sehat Saathi — Pakistani Medicine reference list (brand → generic)
+ * Used for fuzzy OCR spelling hints / candidate strings for the LLM (not a price DB).
+ * ~2,270+ rows — see README “Medicine bank” for schema and usage.
  */
 
 export const MEDICINE_DB = [

@@ -1,6 +1,7 @@
 /**
  * Sehat Saathi — Text-to-Speech
- * Prefer South Asian voices (Urdu/Pakistan, Hindi India). Avoid default English engines reading Roman Urdu — sounds unnaturally British/American.
+ * Prefer Pakistani Urdu female voices (e.g. Microsoft Uzma on Windows/Edge).
+ * English (especially en-GB) on Roman Urdu sounds cold / British — avoid.
  */
 
 let synth = typeof window !== 'undefined' ? window.speechSynthesis : null;
@@ -14,8 +15,23 @@ function normalizeLang(lang) {
     .toLowerCase();
 }
 
+/** Prefer warm female-sounding Urdu voices common on Windows (Uzma, etc.). */
+function scoreFemalePakistani(v) {
+  const name = String(v.name || '').toLowerCase();
+  let bonus = 0;
+
+  const femaleHint =
+    /uzma|dilara|gul|saba|nahid|shabana|nargis|hina|aisha|amna|zara|mehak|nazia|farah|sana|aiman|nimra|female|woman|khatoon/;
+  const maleHint = /\bsalman\b|wasim|waseem|\basad\b|ahmed|male\b|muhammad\s*nabeel|hameed/;
+
+  if (femaleHint.test(name)) bonus += 62;
+  if (maleHint.test(name)) bonus -= 55;
+
+  return bonus;
+}
+
 /**
- * Higher score = better match for Pakistani Roman Urdu / Urdu patient instructions.
+ * Higher score = better match for Pakistani Urdu (patient instructions).
  */
 function scoreVoiceForSouthAsianUrdu(v) {
   const lang = normalizeLang(v.lang);
@@ -24,26 +40,27 @@ function scoreVoiceForSouthAsianUrdu(v) {
   let score = 0;
 
   if (/urdu|اردو/.test(v.name || '') || /urdu/.test(name)) score += 130;
-  if (/pakistan|pakistani/.test(name)) score += 115;
+  if (/pakistan|pakistani/.test(name)) score += 125;
 
-  if (lang === 'ur-pk') score += 105;
-  if (lang.startsWith('ur')) score += 88;
+  if (lang === 'ur-pk') score += 115;
+  if (lang.startsWith('ur')) score += 92;
 
-  // Hindi (India) — shared phonetics with Urdu; usually sounds regional, not British
-  if (lang === 'hi-in') score += 72;
-  if (/hindi.*india|microsoft.*hindi|google.*hindi/i.test(name)) score += 68;
-  if (lang.startsWith('hi')) score += 58;
+  score += scoreFemalePakistani(v);
 
-  // Other Indian locales — South Asian timbre, closer than en-GB for Roman Urdu
-  if (/^(ta|te|mr|gu|pa|bn|kn|ml|or)-in$/i.test(lang)) score += 38;
+  // Hindi (India) — South Asian timbre; use only if no Urdu (better than en-GB for desi text)
+  if (lang === 'hi-in') score += 62;
+  if (/hindi.*india|microsoft.*hindi|google.*hindi/i.test(name)) score += 58;
+  if (lang.startsWith('hi')) score += 48;
 
-  // Neural / natural labels often clearer on Edge-Chromium
-  if (/natural|neural|premium/i.test(name)) score += 6;
+  if (/^(ta|te|mr|gu|pa|bn|kn|ml|or)-in$/i.test(lang)) score += 32;
 
-  // Heavy penalty: English voices speaking Urdu lang tags sound wrong ("British Urdu")
-  if (lang.startsWith('en')) score -= 95;
-  if (/english \(.*uk|united kingdom|british|received pronunciation|\buk\b/i.test(name)) score -= 110;
-  if (/daniel|serena|olivia|alice|fred|martha|scansoft/i.test(name) && lang.startsWith('en')) score -= 90;
+  if (/natural|neural|premium/i.test(name)) score += 8;
+
+  if (lang.startsWith('en')) score -= 100;
+  if (/english \(.*uk|united kingdom|british|received pronunciation|en-gb|\buk\b|rishi|southern england/i.test(name)) score -= 130;
+  if (/daniel|serena|olivia|alice|fred|martha|karen|arthur|emma|brian|ryan|scansoft|samantha/i.test(name) && lang.startsWith('en'))
+    score -= 95;
+  if (lang === 'en-us' && !/india|pakistan|urdu/i.test(name)) score -= 40;
 
   return score;
 }
@@ -55,6 +72,9 @@ function pickBestVoice(allVoices) {
     .sort((a, b) => b.s - a.s);
 
   if (ranked.length) return ranked[0].v;
+
+  const hindiFemale = allVoices.find((v) => normalizeLang(v.lang).startsWith('hi') && scoreFemalePakistani(v) > 0);
+  if (hindiFemale) return hindiFemale;
 
   const hindiFallback = allVoices.find((v) => normalizeLang(v.lang).startsWith('hi'));
   if (hindiFallback) return hindiFallback;
@@ -99,10 +119,29 @@ function scheduleSpeak(run) {
   setTimeout(safeRun, 600);
 }
 
+function resolveSpeakCallbacks(options) {
+  if (typeof options === 'function') return { onEnd: options, onStart: null };
+  if (options && typeof options === 'object')
+    return { onEnd: options.onEnd || null, onStart: options.onStart || null };
+  return { onEnd: null, onStart: null };
+}
+
+/** Slightly higher pitch + steady pace reads kinder in many Urdu female TTS voices. */
+function tuneUtteranceForVoice(utterance, voice) {
+  const fem = voice && scoreFemalePakistani(voice) > 0;
+  utterance.pitch = fem ? 1.045 : 1.02;
+  utterance.rate = 0.89;
+  utterance.volume = 1;
+}
+
 /**
- * Speak text — tuned for Urdu/Roman Urdu with South Asian voice when possible.
+ * Speak text — Urdu/Roman Urdu with Pakistani/South Asian voice when available.
+ * @param {string} text
+ * @param {((() => void) | { onEnd?: () => void; onStart?: () => void })} [options]
  */
-export function speak(text, onEnd) {
+export function speak(text, options) {
+  const { onEnd, onStart } = resolveSpeakCallbacks(options);
+
   if (!synth || !text) {
     if (onEnd) onEnd();
     return;
@@ -118,17 +157,14 @@ export function speak(text, onEnd) {
       utterance.voice = voice;
       utterance.lang = voice.lang || 'ur-PK';
     } else {
-      // Prefer hi-IN tag over ur-PK when no Urdu voice exists — reduces British-default mangling on Chrome/Windows
       utterance.lang = 'hi-IN';
     }
 
-    // Slightly warmer, patient-facing cadence (less “lecture”, less clipped British tone)
-    utterance.pitch = 0.98;
-    utterance.rate = 0.88;
-    utterance.volume = 1;
+    tuneUtteranceForVoice(utterance, voice);
 
     utterance.onstart = () => {
       isSpeaking = true;
+      if (onStart) onStart();
     };
     utterance.onend = () => {
       isSpeaking = false;
@@ -154,6 +190,15 @@ export function getIsSpeaking() {
   return isSpeaking;
 }
 
+/** For UI hint — which voice will read (after voices load). */
+export function getSelectedVoiceLabel() {
+  if (!synth) return '';
+  refreshVoices();
+  const voice = pickBestVoice(voices);
+  if (!voice) return '';
+  return `${voice.name} · ${voice.lang || 'ur-PK'}`;
+}
+
 /**
  * Speak a sequence of medications
  */
@@ -168,11 +213,17 @@ export function speakAll(medications, onMedStart) {
     const med = medications[current];
     if (onMedStart) onMedStart(current);
 
-    const fullText = `Medicine number ${current + 1}. 
-                     Name: ${med.brand_name}. 
-                     Dosage: ${med.dosage}. 
-                     Frequency: ${med.frequency}. 
-                     Instructions in Urdu: ${med.explanation_urdu}`;
+    const fullText = [
+      `Medicine number ${current + 1}.`,
+      med.brand_name ? `Name: ${med.brand_name}.` : '',
+      med.card_summary ? `Summary: ${med.card_summary}.` : '',
+      med.purpose ? `Purpose: ${med.purpose}.` : '',
+      med.usage_instructions ? `Usage: ${med.usage_instructions}.` : '',
+      med.timing ? `Timing: ${med.timing}.` : '',
+      med.prescriber_note_ur ? `Note: ${med.prescriber_note_ur}.` : '',
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     speak(fullText, () => {
       current++;

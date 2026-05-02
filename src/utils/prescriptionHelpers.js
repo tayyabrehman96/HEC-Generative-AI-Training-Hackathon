@@ -73,44 +73,84 @@ export function extractPkrRange(str) {
   return { low: sorted[0], high: sorted[sorted.length - 1] };
 }
 
+const NO_ALT =
+  'No safe alternative suggestion without pharmacist review';
+
 /**
- * Ensure all expected keys exist; attach fallback schedule explanation from raw/timing.
+ * Normalize API/LLM medication — supports new pharmacy card shape (name, summary, …)
+ * and legacy fields (brand_name, usage_instructions, …).
  */
 export function normalizeMedication(m, index) {
   const raw = m || {};
-  const rawText = String(raw.raw_text || '');
-  const timing = String(raw.timing || '');
-  const fallback = explainScheduleFromCode(`${rawText} ${timing}`);
 
-  const schedule =
-    String(raw.schedule_explained_ur || '').trim() ||
-    (fallback.ur ? fallback.ur : '');
+  const isNewShape = raw.name != null || (raw.summary != null && raw.brand_name == null);
 
-  const usage = String(raw.usage_instructions || '').trim();
+  const name = String(raw.name || raw.brand_name || '').trim() || `Medicine ${index + 1}`;
+  const summary = String(raw.summary || '').trim();
+  const purpose =
+    String(raw.purpose || '').trim() ||
+    (isNewShape
+      ? 'Purpose not confidently identified — pharmacist/doctor verification needed'
+      : '—');
 
-  const priceNote = String(raw.cost_estimate_pkr || raw.price_indicative_pkr || '').trim();
-  const courseNote = String(raw.course_cost_note_pkr || '').trim();
+  const usage = String(raw.usage || raw.usage_instructions || '').trim() || '—';
+
+  const timing = String(raw.timing || '').trim() || '—';
+  const rawLine = String(raw.raw_text || raw.raw_line || '').trim();
+  const salt = String(raw.generic_name || '').trim();
+
+  const fallback = explainScheduleFromCode(`${rawLine} ${timing} ${purpose}`);
+
+  const scheduleFromModel = String(raw.schedule_explained_ur || '').trim();
+  const schedule_explained_ur =
+    scheduleFromModel || (fallback.ur && !scheduleFromModel ? fallback.ur : '') || '';
+
+  const costStr = String(raw.cost || raw.cost_estimate_pkr || '').trim();
+
+  let altList = [];
+  if (Array.isArray(raw.alternatives)) {
+    altList = raw.alternatives.map((x) => String(x).trim()).filter(Boolean);
+  } else {
+    const s = String(raw.alternatives || '').trim();
+    if (s && s !== '—') altList = s.split(/[;,]+/).map((x) => String(x).trim()).filter(Boolean);
+  }
+
+  const alternativesText =
+    altList.length > 0 ? altList.join('; ') : isNewShape ? NO_ALT : String(raw.alternatives || '').trim() || '—';
+
+  const warning = String(raw.warning || raw.prescriber_note_ur || '').trim();
+  const confidence = String(raw.confidence || 'Medium').trim();
+
+  const priceNote =
+    costStr ||
+    (isNewShape ? 'Cost not available' : 'اندازاً — پاکستانی مارکیٹ میں قیمتیں مختلف ہوتی ہیں؛ فارمیسی سے تصدیق کریں۔');
+
   const costLow = raw.estimated_cost_low_pkr != null ? Number(raw.estimated_cost_low_pkr) : null;
   const costHigh = raw.estimated_cost_high_pkr != null ? Number(raw.estimated_cost_high_pkr) : null;
   const fromText = extractPkrRange(priceNote);
   const low = Number.isFinite(costLow) ? costLow : fromText.low;
   const high = Number.isFinite(costHigh) ? costHigh : fromText.high;
 
+  const courseNote = String(raw.course_cost_note_pkr || '').trim();
+
   return {
     ...raw,
-    brand_name: raw.brand_name || `Medicine ${index + 1}`,
-    generic_name: raw.generic_name || '—',
-    raw_text: rawText || '—',
-    purpose: String(raw.purpose || '').trim() || '—',
-    usage_instructions: usage || schedule || fallback.ur || '—',
-    schedule_explained_ur: schedule,
-    timing: timing || '—',
-    alternatives: String(raw.alternatives || '').trim() || '—',
-    cost_estimate_pkr: priceNote || 'اندازاً — پاکستانی مارکیٹ میں قیمتیں مختلف ہوتی ہیں؛ فارمیسی سے تصدیق کریں۔',
+    brand_name: name,
+    generic_name: salt || (isNewShape ? '' : String(raw.generic_name || '').trim() || '—'),
+    card_summary: summary,
+    confidence,
+    alternatives_list: altList,
+    raw_text: rawLine || (isNewShape ? `—` : String(raw.raw_text || '').trim() || '—'),
+    purpose,
+    usage_instructions: usage,
+    schedule_explained_ur,
+    timing,
+    alternatives: alternativesText,
+    cost_estimate_pkr: priceNote,
     course_cost_note_pkr: courseNote,
     estimated_cost_low_pkr: low,
     estimated_cost_high_pkr: high,
-    prescriber_note_ur: String(raw.prescriber_note_ur || '').trim(),
+    prescriber_note_ur: warning,
   };
 }
 

@@ -9,17 +9,50 @@
 > **HEC Generative AI Training — Hackathon submission**  
 > Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)
 
-**On this page:** [Summary](#executive-summary-for-judges) · [Architecture](#architecture-high-level) · [Block diagram](#block-diagram-layers) │ [Data & DB](#data-schema--database-important-for-judges) · [Schema](#medication-json-contract-api-output--one-element-of-the-array) · [Setup](#local-setup-judges--reviewers)
+**On this page:** [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers) · **[Public URL (tunnel)](./PUBLIC_LINK.md)** · **[Public URL (hosted)](./DEPLOY_PUBLIC_DEMO.md)**
 
 ---
 
 ## Executive summary (for judges)
+
+| | |
+|:--|:--|
+| 🎯 **One-liner** | Turn a **photo of a handwritten Pakistani Rx** into **Urdu-friendly explanations**, **dose decoding**, **alternatives**, and **indicative PKR** cost hints. |
+| 🤖 **AI** | **3-model** pipeline (OCR → VLM → Llama JSON) via **Regolo**; keys stay on server. |
+| 💊 **Data** | **2,272+** local **brand↔generic** rows for **fuzzy spelling hints** (`medicineDb.js`) — *not* a formulary price DB. |
+| 🗄️ **Database** | **No server SQL in MVP**; browser `localStorage` + in-memory state; **PostgreSQL** planned for production (ER in README). |
 
 **Sehat Saathi** turns a **photo of a handwritten Pakistani prescription** into **structured, patient-friendly explanations**: purpose in Urdu/Roman Urdu, **decoded dose schedules** (e.g. `1-0-1`), **timing in plain language**, **cheaper local alternatives**, and **indicative PKR cost bands**—plus **text-to-speech** so families can listen.  
 
 The system is **not a doctor**: it **explains what is already written** and flags that **dose and drug changes require a clinician or pharmacist**.
 
 **Why it matters:** prescriptions mix **Urdu, English, Latin brands, shorthand, and poor handwriting**. National literacy context means many households rely on **spoken guidance** for dense health text. Sehat Saathi reduces friction between **the paper prescription** and **safe understanding at home**.
+
+---
+
+## At a glance (icon legend)
+
+🧭 **Quick visual index** for repo / demo review:
+
+| Icon | Meaning |
+|:---:|:---|
+| 📷 | Image upload / camera / prescription photo |
+| 🧠 | Generative models (OCR, VLM, LLM) |
+| 🔐 | Secrets (`REGOLO_API_KEY`), Express proxy |
+| 💊 | Medicines, cards, **MEDICINE_DB** hints |
+| 💰 | PKR strings + numeric bands + dashboard totals |
+| 📊 | Stats dashboard, bar chart (relative cost) |
+| 🔊 | Browser TTS (`ttsService.js`) |
+| 🗺️ | Pakistan map hero (literacy metaphor) |
+| 🗄️ | Persistence: static file DB / future SQL |
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  📷 Rx photo  →  🧠 3 passes (Regolo)  →  💊 JSON + 💰 PKR      │
+│       ↑              ↑                        ↓                  │
+│   Browser        🔐 Proxy only          📊 Dashboard + 🔊 TTS   │
+└─────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
@@ -112,7 +145,157 @@ flowchart TB
 
 ---
 
-## Data, schema & “database” (important for judges)
+## Sequence: one full scan
+
+⏱️ **Timeline:** one user scan ripples through the stack (simplified).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant Browser as Browser SPA
+  participant Proxy as Express proxy
+  participant Regolo as Regolo API
+  participant Fuzz as MEDICINE_DB hints
+  Browser->>Browser: Resize / compress image
+  Browser->>Proxy: Pass 1 vision OCR
+  Proxy->>Regolo: deepseek-ocr-2
+  Regolo-->>Proxy: OCR text
+  Proxy-->>Browser: Report A
+  Browser->>Proxy: Pass 2 vision VLM
+  Proxy->>Regolo: qwen3.5-122b
+  Regolo-->>Proxy: numbered drug lines
+  Proxy-->>Browser: Report B
+  Browser->>Fuzz: scanForMedicines A+B
+  Fuzz-->>Browser: candidate brand strings
+  Browser->>Proxy: Pass 3 chat consolidation
+  Proxy->>Regolo: Llama 3.3 70B + system prompt
+  Regolo-->>Proxy: JSON array of medications
+  Proxy-->>Browser: Parsed meds
+  Browser->>Browser: normalize + dashboard + show cards
+```
+
+---
+
+## Pakistani medicine bank (MEDICINE_DB)
+
+💊 Static **reference** data in the client bundle — **spelling hints** for OCR/VLM text (`fuzzyMatch.js`). **Not** prices, **not** prescribing. Export name: `MEDICINE_DB` in `src/data/medicineDb.js`.
+
+### Scale & file
+
+📈 **Stats**
+
+| Metric | Value |
+|--------|--------|
+| **Records** | **2,272** `{ brand, generic }` objects |
+| **Module** | `src/data/medicineDb.js` (~2.3k lines) |
+| **Export** | `export const MEDICINE_DB = [ ... ]` |
+
+### Row schema (per entry)
+
+🧱 **Shape**
+
+| Field | Type | Example |
+|--------|------|---------|
+| `brand` | `string` | `"Panadol"` |
+| `generic` | `string` | `"Paracetamol"` |
+
+### Sample rows (file order)
+
+📋 **Excerpt**
+
+| # | Brand | Generic |
+|---|--------|---------|
+| 1 | Hiflux | Fluoxetine |
+| 2 | Provas | Valsartan |
+| 3 | Provas N | Valsartan + Amlodipine |
+| 4 | Abocet | Cetirizine |
+| 5 | Eziday | Losartan |
+| 6 | Citanew | Escitalopram |
+| 7 | Augmentin | Co-Amoxiclav |
+| 8 | Panadol | Paracetamol |
+| 9 | Risek | Omeprazole |
+| 10 | Flagyl | Metronidazole |
+| 11 | Softin | Loratadine |
+| 12 | Lowplat | Clopidogrel |
+
+### Matching algorithm (summary)
+
+🔎 **Fuzzy pipeline**
+
+```mermaid
+flowchart TD
+  T["Tokenise OCR + VLM text"] --> L["Levenshtein vs each MEDICINE_DB.brand"]
+  L --> S{"Score normalized < 0.4 ?"}
+  S -->|yes| C["Add to candidate set"]
+  S -->|no| X["Skip"]
+  C --> P["Inject as SYSTEM CANDIDATES in Llama prompt"]
+  P --> R["Model may fix spellings; must stay grounded in Rx text"]
+```
+
+### What `MEDICINE_DB` is **not**
+
+❌ **Scope limits**
+
+| Misconception | Reality |
+|---------------|---------|
+| Official drug registry | Curated **hint list** for fuzzy match |
+| Price / MRP table | **No** PKR fields; prices come from **LLM + UI parsing** |
+| Interaction / contraindication DB | **Not** implemented |
+| Prescribing authority | **Never** — assistant explains **existing** Rx only |
+
+---
+
+## Pricing and PKR bands (how it works)
+
+💰 No separate price table — **LLM text + optional integers** → browser **normalize + aggregate**.
+
+### Data path
+
+🔄 **Pipeline**
+
+```mermaid
+flowchart LR
+  subgraph llm["Llama consolidation"]
+    A["cost_estimate_pkr Urdu text"]
+    B["estimated_cost_low_pkr"]
+    C["estimated_cost_high_pkr"]
+    D["course_cost_note_pkr"]
+  end
+  subgraph ui["Browser helpers"]
+    E["prescriptionHelpers.normalizeMedication"]
+    F["extractPkrRange from text"]
+    G["aggregateCostStats"]
+    H["Dashboard bars + total band"]
+  end
+  llm --> E
+  A --> F
+  B --> G
+  C --> G
+  F --> G
+  G --> H
+```
+
+| Step | Component | Output |
+|------|-----------|--------|
+| 1 | Prompt (`prompts.js`) | Asks for **realistic PKR range** per strip/pack in Urdu + optional ints |
+| 2 | `normalizeMedication` | Fills missing nums by regex on `cost_estimate_pkr` |
+| 3 | `aggregateCostStats` | Sums lows/highs, max mid for **bar widths** |
+| 4 | Results UI | “≈ PKR X – Y total” + per-medicine bar **comparison** |
+
+### Pricing disclaimers (for judges)
+
+⚠️ **Must disclose**
+
+| Topic | Note |
+|--------|------|
+| **Accuracy** | Figures are **indicative**; cities, stock, and pharmacy chain differ |
+| **Source** | Not live DRAP retail scrape — **generative estimate** unless you plug a price API later |
+| **Clinical** | Cost must **not** override doctor’s choice of brand |
+| **Audit** | For production, store **timestamp + pharmacy region** if you add a real DB |
+
+---
+
+## Data, schema and database (important for judges)
 
 This hackathon MVP is **serverless for patient data**: there is **no PostgreSQL / Mongo / SQL** in the repo. Storage is intentionally minimal:
 
@@ -180,13 +363,13 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 
 ## Feature highlights (evaluation checklist)
 
-- [x] **Camera / file upload** + optional demo image
-- [x] **Three-phase processing UI** (Urdu + English friendly copy)
-- [x] Per-medicine cards: raw snippet, purpose, usage, **schedule decoded**, timing, **cost**, alternatives
-- [x] **Results dashboard**: medicine count, indicative total PKR band, **per-drug cost bar chart**
-- [x] **TTS** for hear-aloud instructions
-- [x] **Client-side image prep** before API (`src/utils/imageProcessing.js`)
-- [x] **Proxy** keeps API keys off the browser; Vite dev server forwards `/proxy` → Express
+- [x] 📷 **Camera / file upload** + optional demo image
+- [x] ⚙️ **Three-phase processing UI** (Urdu + English friendly copy)
+- [x] 💊 Per-medicine cards: raw snippet, purpose, usage, **schedule decoded**, timing, **cost**, alternatives
+- [x] 📊 **Results dashboard**: medicine count, indicative total PKR band, **per-drug cost bar chart**
+- [x] 🔊 **TTS** for hear-aloud instructions
+- [x] 🖼️ **Client-side image prep** before API (`src/utils/imageProcessing.js`)
+- [x] 🔐 **Proxy** keeps API keys off the browser; Vite dev server forwards `/proxy` → Express
 
 ---
 
@@ -207,15 +390,18 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 ```
 ├── index.html
 ├── package.json
-├── server.js              # API proxy (REGOLO_API_KEY)
-├── vite.config.js         # dev server + /proxy rewrite
+├── server.js             # Proxy + production: serves dist/ when NODE_ENV=production
+├── render.yaml           # Optional: Render blueprint
+├── vite.config.js        # dev server + /proxy rewrite
+├── DEPLOY_PUBLIC_DEMO.md # hosted public URL (free tier)
+├── PUBLIC_LINK.md       # tunnel public URL while PC runs
 ├── public/
 │   └── pakistan-map.svg   # literacy visual (hero)
 ├── src/
 │   ├── main.js            # UI, pipeline orchestration, results dashboard
 │   ├── style.css
 │   ├── config.js
-│   ├── data/medicineDb.js # fuzzy brand hints
+│   ├── data/medicineDb.js  # ~2,272 brand↔generic rows (fuzzy hints, not prices)
 │   ├── services/          # regoloApi, tts
 │   └── utils/             # prompts, imageProcessing, fuzzyMatch, prescriptionHelpers
 └── README.md
@@ -223,7 +409,7 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 
 ---
 
-## Local setup (judges & reviewers)
+## Local setup (judges and reviewers)
 
 ### Prerequisites
 
@@ -243,6 +429,8 @@ npm run dev:all
 
 - **App:** [http://localhost:3000](http://localhost:3000)  
 - **Proxy:** [http://127.0.0.1:3001](http://127.0.0.1:3001)  
+- **Public URL — temporary tunnel:** **[PUBLIC_LINK.md](./PUBLIC_LINK.md)** (`ngrok` / Cloudflare Quick Tunnel while your PC runs).
+- **Public URL — free hosted demo:** **[DEPLOY_PUBLIC_DEMO.md](./DEPLOY_PUBLIC_DEMO.md)** (e.g. Render `*.onrender.com` after `npm run build`).
 
 `dev:all` runs **Vite + Express** together (`concurrently`).
 
@@ -251,9 +439,11 @@ Other scripts:
 | Script | Purpose |
 |--------|---------|
 | `npm run dev` | Front-end only |
-| `npm run proxy` | Proxy only |
+| `npm run proxy` | Express proxy only (with `PROXY_ONLY=1`, for dev next to Vite) |
 | `npm run build` | Production build to `dist/` |
 | `npm run preview` | Preview build (with proxy config in `vite.config.js`) |
+| `npm start` | Production server (`NODE_ENV=production`): serves `dist/` + `/proxy` on `PORT` |
+| `npm run demo:serve` | Build then run production stack locally on port **3001** |
 
 ### Environment variables
 
