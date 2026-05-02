@@ -1,6 +1,5 @@
-# Render blueprint — connect repo once; turn on Auto-Deploy for `main` in the dashboard.
-# REGOLO_API_KEY: set only in Render Environment (never in Git). Docs: DEPLOY_PUBLIC_DEMO.md
-# Spec: https://render.com/docs/blueprint-spec
+# Render blueprint — edit name/branch as needed after connecting the repo:
+# https://render.com/docs/blueprint-spec
 services:
   - type: web
     name: sehat-saathi-demo
