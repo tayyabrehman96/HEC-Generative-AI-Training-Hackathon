@@ -38,7 +38,7 @@ const HACKATHON_CREDIT_HTML = `
   <div class="hackathon-banner" role="note">
     <span class="hackathon-banner__badge" aria-hidden="true">HEC</span>
     <div class="hackathon-banner__text">
-      <span class="hackathon-banner__title">Generative AI Training — Hackathon</span>
+      <span class="hackathon-banner__title">ASPIRE PK — Generative AI Hackathon</span>
       <span class="hackathon-banner__cohort">Cohort 3 · صحت ساتھی اسی مقابلے کے لیے تیار کیا گیا ہے</span>
     </div>
   </div>`;
@@ -839,14 +839,14 @@ function renderHeader() {
           ? `<button type="button" class="btn btn-secondary header-tools-btn" id="navToolsBtn" title="BMI اور ہیلپ لائن">🧮 صحت ٹولز</button>`
           : ''
       }
-      <span class="header-hackathon-pill" title="Built for HEC Generative AI Training Hackathon, Cohort 3">HEC GenAI · Cohort 3 Hackathon</span>
+      <span class="header-hackathon-pill" title="HEC ASPIRE PK — Generative AI Hackathon, Cohort 3">HEC ASPIRE PK · Cohort 3</span>
       <div style="font-size:0.9rem">${escapeHtml(state.user?.name ?? '')}</div>
     </div>
   </header>`;
 }
 
 function renderFooter() {
-  return `<footer style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.8rem">Sehat Saathi — HEC Generative AI Training · Cohort 3 Hackathon</footer>`;
+  return `<footer style="text-align:center; padding:2rem; color:var(--text-muted); font-size:0.8rem">Sehat Saathi — HEC ASPIRE PK · Cohort 3 Hackathon</footer>`;
 }
 
 // ===== Events =====
