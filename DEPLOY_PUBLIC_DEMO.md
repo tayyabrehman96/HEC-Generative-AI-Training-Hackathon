@@ -34,6 +34,10 @@ Free web services spin down after idle (**cold start** ~30–60s on first load).
 
 5. Deploy. Open the URL Render gives (`https://…onrender.com`). That is your **public demo link**.
 
+6. **Auto on every Git push (`main`):** Render dashboard → service **Settings** → **Build & Deploy** → turn **Auto-Deploy** ON for `main`. Ab har `git push` ke baad naya deploy khud ho jaye ga (`REGOLO_API_KEY` env me rakho; Git me kabhi nahin).
+
+7. _(Optional)_ **Deploy Hook + GitHub Actions:** Render **Deploy Hook** URL banao, GitHub repo **Settings → Secrets and variables → Actions** me **`RENDER_DEPLOY_HOOK_URL`** daalo. Repo me workflow `.github/workflows/deploy-render-hook.yml` har push par hook call karta hai _(secret khali ho to step skip)_.
+
 Do **not** set `PROXY_ONLY` on the server (that flag is only for local `npm run proxy` alongside Vite).
 
 ---
