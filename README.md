@@ -1,15 +1,32 @@
 # Sehat Saathi — صحت ساتھی
 
-**AI-Powered Prescription Intelligence for Pakistan**
+**AI-Powered Prescription Intelligence for Pakistan** · *Your Health Companion*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 [![Node](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](package.json)
 [![Vite](https://img.shields.io/badge/built%20with-Vite-646CFF)](https://vitejs.dev/)
 
-> **HEC Generative AI Training — Hackathon submission**  
-> Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)
+> **HEC ASPIRE PK — Hackathon · Cohort 3** (Generative AI Training programme)  
+> Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)  
+> Formal cover sheet & team roster: **[PRODUCT_SPECIFICATION.md](PRODUCT_SPECIFICATION.md)** (v1.0 · April 2026)  
+> **Engineering reproduction & methodology diagrams:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**
 
-**On this page:** [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers)
+**On this page:** [Team](#team) · [Technical reproduction guide](TECHNICAL_REPRODUCTION_GUIDE.md) · [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers)
+
+---
+
+## Team
+
+| Name | Role | Background |
+|:---|:---|:---|
+| **Tayyab Rehman** | Team Lead & AI Architect | Ph.D., Cybersecurity & AI Research |
+| **Abdul Wasi** | Software Engineer | 4th Semester, Software Engineering |
+| **Hammad ur Rehman** | Backend Developer | 3rd Semester, Software Engineering, COMSATS University |
+| **Naila** | Research & Quality Assurance | BS Computer Science |
+| **Ayesha** | Domain Expert (Life Sciences) | BS Chemistry, LCWU Lahore |
+| **Ayesha** | Content Strategy & Pitch | BS English Language & Literature |
+
+*Two specialists share the name **Ayesha**; roles are separated by chemistry vs. literature focus.*
 
 ---
 
@@ -79,7 +96,7 @@ The system is **not a doctor**: it **explains what is already written** and flag
 
 ## Architecture (high level)
 
-**End-to-end data flow:** browser uploads an image → **Express proxy** forwards OpenAI-style requests to **Regolo** → three model passes run (OCR, VLM, consolidation) → **JSON array** is rendered in the UI (cards, dashboard, TTS).
+**End-to-end data flow:** browser uploads an image → **Express proxy** forwards OpenAI-style requests to **Regolo** → three model passes run (OCR, VLM, consolidation) → **JSON array** is rendered in the UI (cards, dashboard, TTS). **Optional fourth LLM pass** (≥2 medicines) adds educational interaction hints. For **step-by-step reproduction**, **ports**, and **methodology diagrams** (research → validation), see **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**.
 
 ```mermaid
 flowchart LR
@@ -304,7 +321,7 @@ This hackathon MVP is **serverless for patient data**: there is **no PostgreSQL 
 | **Medicine hint DB** | Static **reference** data (file-backed) | `src/data/medicineDb.js` | Brand ↔ generic pairs for **fuzzy OCR spelling hints** (not a full drug formulary). |
 | **Scan history (optional)** | **Browser** key–value | `localStorage` key `sehat_history` | Reserved / future use; parsed history not wired to full UI in current build. |
 | **Session state** | In-memory | `main.js` `state` object | Current image, OCR text, medications[], UI flags (lost on refresh). |
-| **Secrets** | Environment | `.env` (not in Git) | `REGOLO_API_KEY` on the machine running `server.js`. |
+| **Secrets** | Environment | `.env` (see `.env.example`; **recommended** not to publish real keys in public repos) | `REGOLO_API_KEY` for the machine running `server.js`. |
 | **Model responses** | Transient | RAM / network | JSON from Llama pass drives the results screen. |
 
 **Future (production):** add a real **DB** (e.g. **PostgreSQL**) for `users`, `prescription_scans`, `medication_rows`, `audit_log`; encrypt PHI; keep API keys server-side only. The **logical** shape below matches what you would persist per scan.
@@ -401,8 +418,9 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 │   ├── data/medicineDb.js  # ~2,272 brand↔generic rows (fuzzy hints, not prices)
 │   ├── services/          # regoloApi, tts
 │   └── utils/             # prompts, imageProcessing, fuzzyMatch, prescriptionHelpers
+├── TECHNICAL_REPRODUCTION_GUIDE.md  # methodology + reproduction (judges/engineers)
+├── PRODUCT_SPECIFICATION.md         # cover + team v1.0
 └── README.md
-```
 
 ---
 
@@ -424,8 +442,8 @@ npm install
 npm run dev:all
 ```
 
-- **App:** [http://localhost:3000](http://localhost:3000)  
-- **Proxy:** [http://127.0.0.1:3001](http://127.0.0.1:3001)  
+- **App (Vite):** **http://localhost:5173** (default; if the port is busy, use the **Local** URL Vite prints, e.g. `http://localhost:5174`).  
+- **Proxy:** **http://127.0.0.1:3001**  
 
 `dev:all` runs **Vite + Express** together (`concurrently`).
 
@@ -458,11 +476,16 @@ Other scripts:
 
 ## Reproducibility notes for judges
 
+**Full procedure (numbered), health checks, acceptance checklist, and troubleshooting:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**
+
+Quick start:
+
 1. Clone this repository.  
 2. Add `REGOLO_API_KEY` in `.env`.  
 3. Run `npm install` && `npm run dev:all`.  
-4. Use **Try Demo** or upload a clear prescription photo.  
-5. Open browser DevTools → **Console** for pass logs (`Pass 1 (OCR)`, `Pass 2 (VLM)`, final JSON).
+4. Open the **Local** URL shown by Vite (typically **http://localhost:5173**).  
+5. Use **Try Demo** or upload a clear prescription photo.  
+6. Open browser DevTools → **Console** for pass logs (`Pass 1 (OCR)`, `Pass 2 (VLM)`, final JSON).
 
 ---
 
@@ -478,7 +501,7 @@ Other scripts:
 
 ## Acknowledgements
 
-- **HEC Generative AI Training — Hackathon** for the problem platform  
+- **HEC ASPIRE PK — Hackathon · Cohort 3** (HEC Generative AI Training programme) for the problem platform  
 - **Regolo AI** for model access (as configured)  
 - Geo outline for the Pakistan map derived from simplified public-domain **world** GeoJSON (Natural Earth–style workflow), used for **visualisation only**
 
