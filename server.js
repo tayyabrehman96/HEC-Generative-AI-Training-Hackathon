@@ -1,7 +1,12 @@
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const REGOLO_API_KEY = process.env.REGOLO_API_KEY?.trim();
 if (!REGOLO_API_KEY) {
@@ -10,14 +15,21 @@ if (!REGOLO_API_KEY) {
 }
 
 const app = express();
-const PORT = 3001;
+const PORT = Number(process.env.PORT) || 3001;
+const distDir = path.join(__dirname, 'dist');
+const hasFrontend = fs.existsSync(path.join(distDir, 'index.html'));
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
 
-/** Liveness for the browser — confirms Vite → Express wiring without calling Regolo. */
+/** Liveness for the browser — confirms wiring without calling Regolo. */
 app.get('/proxy/health', (_req, res) => {
-  res.json({ ok: true, service: 'sehat-saathi-proxy', regoloConfigured: Boolean(REGOLO_API_KEY) });
+  res.json({
+    ok: true,
+    service: 'sehat-saathi-proxy',
+    regoloConfigured: Boolean(REGOLO_API_KEY),
+    static: hasFrontend,
+  });
 });
 
 app.post('/proxy/chat/completions', async (req, res) => {
@@ -63,6 +75,19 @@ app.post('/proxy/chat/completions', async (req, res) => {
   }
 });
 
+if (hasFrontend) {
+  app.use(express.static(distDir));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path.startsWith('/proxy')) return next();
+    res.sendFile(path.join(distDir, 'index.html'), (err) => {
+      if (err) next(err);
+    });
+  });
+} else {
+  console.warn('[server] No dist/index.html — serving /proxy only (use Vite for UI, or run npm run build).');
+}
+
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Sehat Saathi Proxy Server running at http://127.0.0.1:${PORT}`);
+  console.log(`Sehat Saathi listening on port ${PORT}${hasFrontend ? ' (SPA + /proxy)' : ' (proxy only)'}`);
 });

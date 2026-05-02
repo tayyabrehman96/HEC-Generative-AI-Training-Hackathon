@@ -260,6 +260,7 @@ VITE_API_BASE_URL=https://your-host.example.com
 ## 9. Production-oriented notes (not required for hackathon demo)
 
 - Serve `dist/` behind HTTPS; run **Express** (or equivalent gateway) on the **same origin** or configure CORS + `VITE_API_BASE_URL`.
+- **Railway:** step-by-step variables and domain → **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)** (uses **[railway.toml](railway.toml)** in this repo).
 - Rotate `REGOLO_API_KEY`; never commit live keys to **public** repositories.
 - Add rate limiting and request size caps on the proxy in real deployments.
 

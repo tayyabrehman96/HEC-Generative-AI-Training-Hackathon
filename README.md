@@ -9,7 +9,7 @@
 > **HEC ASPIRE PK — Hackathon · Cohort 3** (Generative AI Training programme)  
 > Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)  
 > Formal cover sheet & team roster: **[PRODUCT_SPECIFICATION.md](PRODUCT_SPECIFICATION.md)** (v1.0 · April 2026)  
-> **Engineering reproduction & methodology diagrams:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**
+> **Engineering reproduction & methodology diagrams:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)** · **Railway deploy:** **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**
 
 **On this page:** [Team](#team) · [Technical reproduction guide](TECHNICAL_REPRODUCTION_GUIDE.md) · [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers)
 
@@ -418,9 +418,12 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 │   ├── data/medicineDb.js  # ~2,272 brand↔generic rows (fuzzy hints, not prices)
 │   ├── services/          # regoloApi, tts
 │   └── utils/             # prompts, imageProcessing, fuzzyMatch, prescriptionHelpers
-├── TECHNICAL_REPRODUCTION_GUIDE.md  # methodology + reproduction (judges/engineers)
+├── railway.toml           # Railway: build + start + healthcheck
+├── DEPLOY_RAILWAY.md      # Railway deploy steps
+├── TECHNICAL_REPRODUCTION_GUIDE.md
 ├── PRODUCT_SPECIFICATION.md         # cover + team v1.0
 └── README.md
+```
 
 ---
 
