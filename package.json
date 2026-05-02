@@ -1,0 +1,23 @@
+{
+  "name": "sehat-saathi",
+  "version": "1.0.0",
+  "description": "Sehat Saathi — AI-Powered Prescription Intelligence for Pakistan",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "proxy": "node server.js",
+    "dev:all": "concurrently -n proxy,vite -c blue,green \"npm run proxy\" \"npm run dev\"",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "vite": "^6.3.4"
+  },
+  "dependencies": {
+    "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
+    "dotenv": "^16.4.7",
+    "express": "^5.2.1"
+  }
+}
