@@ -36,10 +36,10 @@ if (!REGOLO_API_KEY) {
 const REGOLO_BASE = String(process.env.REGOLO_API_BASE_URL ?? 'https://api.regolo.ai/v1').replace(/\/+$/, '');
 const REGOLO_CHAT_URL = `${REGOLO_BASE}/chat/completions`;
 const REGOLO_FETCH_RETRIES = Math.min(4, Math.max(1, Number(process.env.REGOLO_FETCH_RETRIES ?? 3) || 3));
-/** Large models + long OCR context often exceed 3m; cap at 30m for slow tiers. */
+/** Large vision models (e.g. qwen3.5-122b) often need >10m; cap at 45m for slow tiers. */
 const REGOLO_FETCH_TIMEOUT_MS = Math.min(
-  1_800_000,
-  Math.max(120_000, Number(process.env.REGOLO_FETCH_TIMEOUT_MS ?? 600_000) || 600_000),
+  2_700_000,
+  Math.max(120_000, Number(process.env.REGOLO_FETCH_TIMEOUT_MS ?? 1_200_000) || 1_200_000),
 );
 
 const app = express();

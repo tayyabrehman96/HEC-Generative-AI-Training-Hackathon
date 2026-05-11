@@ -42,7 +42,8 @@ export const CONFIG = {
   // Generation settings
   OCR_SETTINGS: {
     temperature: 0.1,
-    max_tokens: 6144,
+    /** Pass 1 full-page Rx transcription — avoid finish_reason=length mid-page. */
+    max_tokens: 16384,
   },
   VLM_SETTINGS: {
     temperature: 0.15,
