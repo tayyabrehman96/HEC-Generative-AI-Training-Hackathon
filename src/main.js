@@ -22,7 +22,7 @@ import {
 } from './data/pakistanHealthResources.js';
 import { buildWhatsAppSummaryText, openWhatsAppWithText } from './utils/shareAndSchedule.js';
 import { downloadFhirBundle } from './utils/fhirExport.js';
-import { recordScanOutcome, fetchScanStats } from './services/telemetryApi.js';
+import { recordScanOutcome, fetchScanStats, recordAppSessionOnce, recordToolsPageOpen } from './services/telemetryApi.js';
 
 // ===== State =====
 let state = {
@@ -46,8 +46,8 @@ let state = {
 /** Cleared when leaving the processing screen */
 let processingFeedIntervalId = null;
 
-/** Tools page — Chart.js instance (destroyed on re-render) */
-let scanStatsChart = null;
+/** Tools page — activity chart (destroyed on re-render) */
+let activityChart = null;
 
 const BP_LOG_KEY = 'sehat_bp_log';
 
@@ -64,35 +64,79 @@ function saveBpLog(rows) {
   localStorage.setItem(BP_LOG_KEY, JSON.stringify(rows.slice(0, 50)));
 }
 
-function mountScanStatsChart(stats) {
-  const canvas = document.getElementById('scanStatsChart');
+function normalizeTelemetryPayload(raw) {
+  if (raw && raw.scans && raw.sessions && raw.toolsOpens) return raw;
+  return {
+    version: 2,
+    sessions: { total: 0, byDay: {} },
+    toolsOpens: { total: 0, byDay: {} },
+    scans: {
+      total: Number(raw?.total) || 0,
+      success: Number(raw?.success) || 0,
+      failure: Number(raw?.failure) || 0,
+      byDay: typeof raw?.byDay === 'object' && raw.byDay ? raw.byDay : {},
+    },
+  };
+}
+
+function mergeChartLabels(sessionsByDay, toolsByDay, scansByDay, maxDays) {
+  const set = new Set();
+  [sessionsByDay, toolsByDay, scansByDay].forEach((m) => {
+    Object.keys(m || {}).forEach((d) => set.add(d));
+  });
+  return [...set].sort().slice(-maxDays);
+}
+
+function mountActivityChart(sessionsByDay, toolsByDay, scansByDay) {
+  const canvas = document.getElementById('activityChart');
   if (!canvas) return;
-  if (scanStatsChart) {
-    scanStatsChart.destroy();
-    scanStatsChart = null;
+  if (activityChart) {
+    activityChart.destroy();
+    activityChart = null;
   }
-  const labels = Object.keys(stats.byDay || {})
-    .sort()
-    .slice(-14);
-  const values = labels.map((d) => Number(stats.byDay[d]) || 0);
-  scanStatsChart = new Chart(canvas.getContext('2d'), {
+  const labels = mergeChartLabels(sessionsByDay, toolsByDay, scansByDay, 14);
+  const daySess = labels.map((d) => Number(sessionsByDay[d]) || 0);
+  const dayTools = labels.map((d) => Number(toolsByDay[d]) || 0);
+  const dayScan = labels.map((d) => Number(scansByDay[d]) || 0);
+
+  activityChart = new Chart(canvas.getContext('2d'), {
     type: 'bar',
     data: {
       labels,
       datasets: [
         {
-          label: 'Scans',
-          data: values,
-          backgroundColor: 'rgba(37, 99, 235, 0.55)',
-          borderRadius: 6,
+          label: 'Sessions',
+          data: daySess,
+          backgroundColor: 'rgba(37, 99, 235, 0.65)',
+          borderRadius: 4,
+        },
+        {
+          label: 'Tools opens',
+          data: dayTools,
+          backgroundColor: 'rgba(5, 150, 105, 0.65)',
+          borderRadius: 4,
+        },
+        {
+          label: 'Scan attempts',
+          data: dayScan,
+          backgroundColor: 'rgba(217, 119, 6, 0.7)',
+          borderRadius: 4,
         },
       ],
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: {
+        legend: { position: 'bottom', labels: { boxWidth: 12, font: { size: 11 } } },
+        title: {
+          display: true,
+          text: 'روزانہ سرگرمی — Daily activity (this server)',
+          font: { size: 13 },
+        },
+      },
       scales: {
+        x: { stacked: false, ticks: { maxRotation: 45, minRotation: 0 } },
         y: { beginAtZero: true, ticks: { stepSize: 1 } },
       },
     },
@@ -100,15 +144,34 @@ function mountScanStatsChart(stats) {
 }
 
 async function refreshToolsScanStats() {
-  const el = document.getElementById('scanStatsSummary');
+  const summaryEl = document.getElementById('scanStatsSummary');
+  const tilesEl = document.getElementById('analyticsTiles');
   try {
-    const s = await fetchScanStats();
-    if (el) {
-      el.innerHTML = `<span class="scan-stats-line"><strong>${s.total}</strong> کل کوششیں / attempts · <span class="scan-stats-ok">${s.success}</span> کامیاب · <span class="scan-stats-bad">${s.failure}</span> نامکام</span>`;
+    const raw = await fetchScanStats();
+    const t = normalizeTelemetryPayload(raw);
+    const s = t.scans;
+    const sess = t.sessions;
+    const tools = t.toolsOpens;
+
+    if (tilesEl) {
+      tilesEl.innerHTML = `
+        <div class="analytics-tile"><div class="analytics-tile__n">${sess.total}</div><div class="analytics-tile__lbl" dir="rtl">اَپ کے بعد سیشن</div><div class="analytics-tile__sub">Visitor sessions (after login, per browser tab)</div></div>
+        <div class="analytics-tile"><div class="analytics-tile__n">${tools.total}</div><div class="analytics-tile__lbl" dir="rtl">ٹولز کھولنا</div><div class="analytics-tile__sub">Times “صحت ٹولز” opened</div></div>
+        <div class="analytics-tile"><div class="analytics-tile__n">${s.total}</div><div class="analytics-tile__lbl" dir="rtl">نسخہ اسکین کوشش</div><div class="analytics-tile__sub">Scan attempts (success + fail)</div></div>
+        <div class="analytics-tile analytics-tile--ok"><div class="analytics-tile__n">${s.success}</div><div class="analytics-tile__lbl" dir="rtl">کامیاب تجزیہ</div><div class="analytics-tile__sub">Completed analysis</div></div>
+        <div class="analytics-tile analytics-tile--warn"><div class="analytics-tile__n">${s.failure}</div><div class="analytics-tile__lbl" dir="rtl">نامکمل/خرابی</div><div class="analytics-tile__sub">Failed or interrupted</div></div>
+      `;
     }
-    mountScanStatsChart(s);
+
+    if (summaryEl) {
+      summaryEl.innerHTML = `<p class="analytics-summary-line"><strong>کل اس سرور پر:</strong> <span dir="rtl">${sess.total}</span> سیشن · <span dir="rtl">${tools.total}</span> ٹولز وزٹ · <span dir="rtl">${s.total}</span> اسکین (${s.success} ✓ / ${s.failure} ✗)</p>
+        <p class="analytics-note-weak">یہ حقیقی “لوگ” نہیں گنتی — ہر براؤزر سیشن الگ۔ ڈیٹا ری سیٹ ہو سکتا ہے اگر ہوسٹ پر فائل محفوظ نہ ہو۔</p>`;
+    }
+
+    mountActivityChart(sess.byDay, tools.byDay, s.byDay);
   } catch (e) {
-    if (el) el.textContent = 'شماریات لوڈ نہیں ہویں — کیا پراکسی چل رہی ہے؟';
+    if (summaryEl) summaryEl.textContent = 'شماریات لوڈ نہیں ہویں — کیا پراکسی چل رہی ہے؟';
+    if (tilesEl) tilesEl.innerHTML = '';
     console.warn('[stats]', e);
   }
 }
@@ -445,6 +508,7 @@ function renderLanding() {
     render();
   });
   wireHeaderNav();
+  recordAppSessionOnce();
 }
 
 function renderUpload() {
@@ -672,6 +736,7 @@ function renderInteractionsPanel() {
 }
 
 function renderTools() {
+  recordToolsPageOpen();
   const helplines = PAKISTAN_HELPLINES.map(
     (h) =>
       `<tr><td><strong>${escapeHtml(h.dial)}</strong></td><td>${escapeHtml(h.en)}</td><td dir="rtl">${escapeHtml(h.ur)}</td></tr>`
@@ -696,10 +761,11 @@ function renderTools() {
           <p class="tools-lead">BMI، BP نوٹ، ORS، عوامی ہیلپ لائن، پاکستان تناظر میں معلومات، اور اس سرور پر اسکین شماریات۔ نتائج سے FHIR JSON بھی نکال سکتے ہیں۔</p>
         </div>
         <div class="tools-stats-card tools-card">
-          <h3 class="tools-card__h">📊 نسخہ اسکین — شماریات (یہ سرور)</h3>
-          <p class="tools-muted">کوئی تصویر یا مریض کا نام نہیں جاتا — ہر مکمل یا ناکام کوشش کی ایک گنتی۔ کلاؤڈ پر بعض ہوسٹس پر ڈیٹا ری سیٹ ہو سکتا ہے۔</p>
+          <h3 class="tools-card__h">📊 شماریات — اس سرور پر (تعلیمی)</h3>
+          <p class="tools-muted">سیشن = لاگ اِن کے بعد پہلی دفعہ ہوم؛ ٹولز = صحت ٹولز صفحہ کھولنا؛ اسکین = تجزیہ شروع۔ منفرد افراد کی گنتی نہیں — ہر ٹیب الگ۔</p>
+          <div id="analyticsTiles" class="analytics-tiles" aria-label="Summary counts"></div>
           <div id="scanStatsSummary" class="scan-stats-summary" role="status" aria-live="polite">لوڈ ہو رہا ہے…</div>
-          <div class="scan-stats-chart-wrap"><canvas id="scanStatsChart" aria-label="Scans per day chart"></canvas></div>
+          <div class="scan-stats-chart-wrap scan-stats-chart-wrap--tall"><canvas id="activityChart" aria-label="Daily activity chart"></canvas></div>
         </div>
         ${renderPakistanResourcesToolsHtml()}
         <div class="tools-grid">

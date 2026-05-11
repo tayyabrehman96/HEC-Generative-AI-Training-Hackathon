@@ -48,42 +48,98 @@ const distDir = path.join(__dirname, 'dist');
 const hasFrontend = fs.existsSync(path.join(distDir, 'index.html'));
 const statsFile = path.join(__dirname, 'data', 'scan-stats.json');
 
-function emptyStats() {
-  return { total: 0, success: 0, failure: 0, byDay: {} };
+function defaultTelemetry() {
+  return {
+    version: 2,
+    sessions: { total: 0, byDay: {} },
+    toolsOpens: { total: 0, byDay: {} },
+    scans: { total: 0, success: 0, failure: 0, byDay: {} },
+  };
 }
 
-function readScanStats() {
+function trimOldDays(dayMap, keep = 90) {
+  if (!dayMap || typeof dayMap !== 'object') return;
+  const keys = Object.keys(dayMap).sort();
+  for (let i = 0; i < keys.length - keep; i++) delete dayMap[keys[i]];
+}
+
+function readTelemetry() {
   try {
     const raw = fs.readFileSync(statsFile, 'utf8');
     const data = JSON.parse(raw);
-    if (typeof data !== 'object' || data === null) return emptyStats();
+    if (!data || typeof data !== 'object') return defaultTelemetry();
+    if (data.version === 2 && data.sessions && data.scans) {
+      return {
+        version: 2,
+        sessions: {
+          total: Number(data.sessions.total) || 0,
+          byDay: typeof data.sessions.byDay === 'object' ? data.sessions.byDay : {},
+        },
+        toolsOpens: {
+          total: Number(data.toolsOpens.total) || 0,
+          byDay: typeof data.toolsOpens.byDay === 'object' ? data.toolsOpens.byDay : {},
+        },
+        scans: {
+          total: Number(data.scans.total) || 0,
+          success: Number(data.scans.success) || 0,
+          failure: Number(data.scans.failure) || 0,
+          byDay: typeof data.scans.byDay === 'object' ? data.scans.byDay : {},
+        },
+      };
+    }
     return {
-      total: Number(data.total) || 0,
-      success: Number(data.success) || 0,
-      failure: Number(data.failure) || 0,
-      byDay: typeof data.byDay === 'object' && data.byDay !== null ? data.byDay : {},
+      version: 2,
+      sessions: { total: 0, byDay: {} },
+      toolsOpens: { total: 0, byDay: {} },
+      scans: {
+        total: Number(data.total) || 0,
+        success: Number(data.success) || 0,
+        failure: Number(data.failure) || 0,
+        byDay: typeof data.byDay === 'object' && data.byDay !== null ? data.byDay : {},
+      },
     };
   } catch {
-    return emptyStats();
+    return defaultTelemetry();
   }
 }
 
-function writeScanStats(data) {
+function writeTelemetry(data) {
   fs.mkdirSync(path.dirname(statsFile), { recursive: true });
-  fs.writeFileSync(statsFile, JSON.stringify(data), 'utf8');
+  fs.writeFileSync(
+    statsFile,
+    JSON.stringify({ ...data, version: 2, lastUpdated: new Date().toISOString() }),
+    'utf8'
+  );
+}
+
+function bumpDayBucket(bucket) {
+  bucket.total = (Number(bucket.total) || 0) + 1;
+  const day = new Date().toISOString().slice(0, 10);
+  bucket.byDay[day] = (bucket.byDay[day] || 0) + 1;
+  trimOldDays(bucket.byDay);
 }
 
 function recordScanEvent(outcome) {
-  const s = readScanStats();
-  s.total += 1;
-  if (outcome === 'success') s.success += 1;
-  else s.failure += 1;
+  const t = readTelemetry();
+  t.scans.total += 1;
+  if (outcome === 'success') t.scans.success += 1;
+  else t.scans.failure += 1;
   const day = new Date().toISOString().slice(0, 10);
-  s.byDay[day] = (s.byDay[day] || 0) + 1;
-  const keys = Object.keys(s.byDay).sort();
-  for (let i = 0; i < keys.length - 90; i++) delete s.byDay[keys[i]];
-  s.lastUpdated = new Date().toISOString();
-  writeScanStats(s);
+  t.scans.byDay[day] = (t.scans.byDay[day] || 0) + 1;
+  trimOldDays(t.scans.byDay);
+  writeTelemetry(t);
+}
+
+function recordSessionEvent() {
+  const t = readTelemetry();
+  bumpDayBucket(t.sessions);
+  writeTelemetry(t);
+}
+
+function recordToolsEvent() {
+  const t = readTelemetry();
+  bumpDayBucket(t.toolsOpens);
+  writeTelemetry(t);
 }
 
 app.use(cors());
@@ -99,7 +155,31 @@ app.get('/proxy/health', (_req, res) => {
   });
 });
 
-/** Anonymous aggregate scan counts (no PHI). Resets if deploy volume is ephemeral. */
+/** Anonymous telemetry: scans, app sessions, tools page opens (no PHI). */
+app.post('/proxy/telemetry/event', (req, res) => {
+  const type = req.body?.type;
+  if (type === 'session') {
+    try {
+      recordSessionEvent();
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error('[telemetry] session:', e?.message ?? e);
+      return res.status(500).json({ error: 'could not store' });
+    }
+  }
+  if (type === 'tools') {
+    try {
+      recordToolsEvent();
+      return res.json({ ok: true });
+    } catch (e) {
+      console.error('[telemetry] tools:', e?.message ?? e);
+      return res.status(500).json({ error: 'could not store' });
+    }
+  }
+  return res.status(400).json({ error: 'expected { type: "session" | "tools" }' });
+});
+
+/** Alias for older clients */
 app.post('/proxy/telemetry/scan', (req, res) => {
   const outcome = req.body?.outcome;
   if (outcome !== 'success' && outcome !== 'failure') {
@@ -116,7 +196,7 @@ app.post('/proxy/telemetry/scan', (req, res) => {
 
 app.get('/proxy/telemetry/stats', (_req, res) => {
   try {
-    res.json(readScanStats());
+    res.json(readTelemetry());
   } catch (e) {
     console.error('[telemetry] read failed:', e?.message ?? e);
     res.status(500).json({ error: 'could not read stats' });
