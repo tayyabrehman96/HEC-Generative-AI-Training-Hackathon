@@ -34,9 +34,11 @@ export const CONFIG = {
   // Split deploy: set VITE_API_BASE_URL=https://your-api.example.com (origin only is OK — `/proxy` is appended).
   API_BASE_URL: normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
 
-  // Models
+  // Models — VITE_VLM_MODEL overrides pass-2 vision model (e.g. smaller/faster id from Regolo dashboard).
   OCR_MODEL: 'deepseek-ocr-2',
-  VLM_MODEL: 'qwen3.5-122b',
+  VLM_MODEL:
+    (typeof import.meta.env.VITE_VLM_MODEL === 'string' && import.meta.env.VITE_VLM_MODEL.trim()) ||
+    'qwen3.5-122b',
   MEDICAL_MODEL: 'Llama-3.3-70B-Instruct',
 
   // Generation settings

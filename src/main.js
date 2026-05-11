@@ -350,6 +350,32 @@ const ANALYSIS_PHASES = [
   },
 ];
 
+/** OCR + VLM run in parallel — show both steps active until both finish. */
+function setProcessingVisionParallel() {
+  const badgeEl = document.getElementById('processingPhaseBadge');
+  const urMainEl = document.getElementById('processingStep');
+  const urSubEl = document.getElementById('processingUrSub');
+  const enEl = document.getElementById('processingText');
+  const fillEl = document.getElementById('processingProgressFill');
+  if (badgeEl) badgeEl.textContent = 'مرحلہ ۱–۲ از ۳';
+  if (urMainEl) urMainEl.textContent = 'تصویر سے تحریر اور دوائیں ایک ساتھ پڑھی جا رہی ہیں';
+  if (urSubEl)
+    urSubEl.textContent =
+      '⚡ دونوں مراحل ایک ساتھ چل رہے ہیں — کل وقت کم ہو جاتا ہے (نصف سا تقریباً جب دونوں ایک جیسے سست ہوں)۔';
+  if (enEl)
+    enEl.textContent =
+      'Steps 1–2 of 3 — Running handwriting OCR and the visual medicine list together (not back-to-back).';
+  if (fillEl) fillEl.style.width = '45%';
+
+  for (let i = 1; i <= 3; i++) {
+    const el = document.getElementById(`processingStepMark${i}`);
+    if (!el) continue;
+    el.classList.remove('pending', 'active', 'done');
+    if (i <= 2) el.classList.add('active');
+    else el.classList.add('pending');
+  }
+}
+
 // ===== Render Functions =====
 function render() {
   switch (state.view) {
@@ -1376,24 +1402,28 @@ async function startAnalysis() {
       );
     }
 
-    // PASS 1: Specialist OCR (DeepSeek)
-    const rawOcr = await visionCompletion(
-      CONFIG.OCR_MODEL,
-      PROMPTS.OCR_FULL_RX,
-      state.imageData,
-      CONFIG.OCR_SETTINGS
-    );
-    console.log('Pass 1 (OCR):', rawOcr);
-
-    // PASS 2: Visual Reasoning (Qwen/Gemma)
-    setProcessingPhase(2);
-    const vlmReasoning = await visionCompletion(
-      CONFIG.VLM_MODEL,
-      PROMPTS.VLM_EXHAUSTIVE_RX,
-      state.imageData,
-      CONFIG.VLM_SETTINGS
-    );
-    console.log('Pass 2 (VLM):', vlmReasoning);
+    // PASS 1 + 2 in parallel: same image, independent — wall time ≈ max(OCR, VLM), not sum.
+    setProcessingVisionParallel();
+    const [rawOcr, vlmReasoning] = await Promise.all([
+      visionCompletion(
+        CONFIG.OCR_MODEL,
+        PROMPTS.OCR_FULL_RX,
+        state.imageData,
+        CONFIG.OCR_SETTINGS
+      ).then((r) => {
+        console.log('Pass 1 (OCR):', r);
+        return r;
+      }),
+      visionCompletion(
+        CONFIG.VLM_MODEL,
+        PROMPTS.VLM_EXHAUSTIVE_RX,
+        state.imageData,
+        CONFIG.VLM_SETTINGS
+      ).then((r) => {
+        console.log('Pass 2 (VLM):', r);
+        return r;
+      }),
+    ]);
 
     // PASS 3: Consolidation & Medical Logic (Llama 70B)
     setProcessingPhase(3);
