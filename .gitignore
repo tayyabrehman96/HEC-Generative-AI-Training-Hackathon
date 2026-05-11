@@ -4,7 +4,8 @@
 .env.*.local
 node_modules/
 dist/
-data/
+# Server-written scan aggregates (project root only — not src/data/)
+/data/
 *.log
 .DS_Store
 Thumbs.db
