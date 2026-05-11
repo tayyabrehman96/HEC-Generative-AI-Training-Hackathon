@@ -9,7 +9,11 @@
 > **HEC ASPIRE PK — Hackathon · Cohort 3** (Generative AI Training programme)  
 > Repository: [github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon](https://github.com/tayyabrehman96/HEC-Generative-AI-Training-Hackathon)  
 > Formal cover sheet & team roster: **[PRODUCT_SPECIFICATION.md](PRODUCT_SPECIFICATION.md)** (v1.0 · April 2026)  
-> **Engineering reproduction & methodology diagrams:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)** · **Railway deploy:** **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**
+> **Engineering reproduction & methodology diagrams:** **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)** · **Railway deploy:** **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**  
+> **Current build (May 2026):** vision **OCR + VLM run in parallel** for faster scans; proxy uses **IPv4 HTTPS first** with configurable long timeouts; **صحت ٹولز** page adds anonymous **analytics**, BMI, BP log, ORS guide, helplines; results support **FHIR JSON** export and **WhatsApp** share.
+
+**Suggested GitHub “About” short description (paste in repo Settings):**  
+*AI prescription assistant for Pakistan — photo → Urdu cards (parallel OCR+VLM+Llama via Regolo), Express proxy, Railway, tools & analytics.*
 
 **On this page:** [Team](#team) · [Technical reproduction guide](TECHNICAL_REPRODUCTION_GUIDE.md) · [Summary](#executive-summary-for-judges) · [Icon legend](#at-a-glance-icon-legend) · [Architecture](#architecture-high-level) · [Layers](#block-diagram-layers) · [Sequence](#sequence-one-full-scan) · [Medicine bank](#pakistani-medicine-bank-medicine_db) · [Pricing](#pricing-and-pkr-bands-how-it-works) · [Data & DB](#data-schema-and-database-important-for-judges) · [Setup](#local-setup-judges-and-reviewers)
 
@@ -35,9 +39,9 @@
 | | |
 |:--|:--|
 | 🎯 **One-liner** | Turn a **photo of a handwritten Pakistani Rx** into **Urdu-friendly explanations**, **dose decoding**, **alternatives**, and **indicative PKR** cost hints. |
-| 🤖 **AI** | **3-model** pipeline (OCR → VLM → Llama JSON) via **Regolo**; keys stay on server. |
+| 🤖 **AI** | **3-model** pipeline: **parallel** vision (**DeepSeek OCR** + **VLM**) → **Llama** JSON via **Regolo**; API key stays on **Express** only. Optional **`VITE_VLM_MODEL`** for a faster pass-2 model id. |
 | 💊 **Data** | **2,272+** local **brand↔generic** rows for **fuzzy spelling hints** (`medicineDb.js`) — *not* a formulary price DB. |
-| 🗄️ **Database** | **No server SQL in MVP**; browser `localStorage` + in-memory state; **PostgreSQL** planned for production (ER in README). |
+| 🗄️ **Database** | **No server SQL in MVP**; browser `localStorage` + in-memory state; optional **scan telemetry** JSON on the server (`data/scan-stats.json`, gitignored); **PostgreSQL** planned for production (ER in README). |
 
 **Sehat Saathi** turns a **photo of a handwritten Pakistani prescription** into **structured, patient-friendly explanations**: purpose in Urdu/Roman Urdu, **decoded dose schedules** (e.g. `1-0-1`), **timing in plain language**, **cheaper local alternatives**, and **indicative PKR cost bands**—plus **text-to-speech** so families can listen.  
 
@@ -58,17 +62,19 @@ The system is **not a doctor**: it **explains what is already written** and flag
 | 🔐 | Secrets (`REGOLO_API_KEY`), Express proxy |
 | 💊 | Medicines, cards, **MEDICINE_DB** hints |
 | 💰 | PKR strings + numeric bands + dashboard totals |
-| 📊 | Stats dashboard, bar chart (relative cost) |
+| 📊 | Stats: **صحت ٹولز** anonymous sessions / tools opens / scan outcomes + Chart.js |
+| 📲 | Results: **WhatsApp** share, **FHIR R4** JSON download, simple/detail view |
+| 🩺 | **صحت ٹولز**: BMI, BP log, ORS, Pakistan helplines & health resources |
 | 🔊 | Browser TTS (`ttsService.js`) |
 | 🗺️ | Pakistan map hero (literacy metaphor) |
 | 🗄️ | Persistence: static file DB / future SQL |
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  📷 Rx photo  →  🧠 3 passes (Regolo)  →  💊 JSON + 💰 PKR      │
-│       ↑              ↑                        ↓                  │
-│   Browser        🔐 Proxy only          📊 Dashboard + 🔊 TTS   │
-└─────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────┐
+│  📷 Rx photo  →  🧠 parallel OCR + VLM (Regolo)  →  💊 JSON + 💰 PKR   │
+│       ↑                     ↑                              ↓              │
+│   Browser               🔐 Proxy only            📊 Tools stats + 🔊 TTS │
+└─────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -96,32 +102,36 @@ The system is **not a doctor**: it **explains what is already written** and flag
 
 ## Architecture (high level)
 
-**End-to-end data flow:** browser uploads an image → **Express proxy** forwards OpenAI-style requests to **Regolo** → three model passes run (OCR, VLM, consolidation) → **JSON array** is rendered in the UI (cards, dashboard, TTS). **Optional fourth LLM pass** (≥2 medicines) adds educational interaction hints. For **step-by-step reproduction**, **ports**, and **methodology diagrams** (research → validation), see **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**.
+**End-to-end data flow:** browser uploads an image → **Express proxy** forwards OpenAI-style requests to **Regolo** → **passes 1 and 2** (vision OCR + VLM) run **at the same time** (wall time ≈ the slower call, not the sum) → **pass 3** merges both reports with **`MEDICINE_DB` fuzzy hints** → **JSON array** in the UI (cards, dashboard, TTS, optional interaction check). **Optional fourth LLM pass** (≥2 medicines) adds educational interaction hints. For **ports**, **reproduction**, and **diagrams**, see **[TECHNICAL_REPRODUCTION_GUIDE.md](TECHNICAL_REPRODUCTION_GUIDE.md)**.
 
 ```mermaid
 flowchart LR
   subgraph client["Browser (Vite SPA)"]
-    UI["Upload / Results / TTS"]
+    UI["Upload / Results / TTS / Tools"]
   end
-  subgraph proxy["Express proxy :3001"]
+  subgraph proxy["Express proxy"]
     EP["POST /proxy/chat/completions"]
+    TE["GET /proxy/telemetry/stats"]
   end
   subgraph cloud["Regolo AI API"]
     M1["Pass 1: DeepSeek OCR"]
-    M2["Pass 2: Qwen VLM"]
+    M2["Pass 2: VLM"]
     M3["Pass 3: Llama 3.3 70B"]
   end
   UI -->|"image + prompts"| EP
   EP --> M1
   EP --> M2
-  EP --> M3
+  M1 --> MERGE["A + B reports"]
+  M2 --> MERGE
+  MERGE --> M3
   M3 -->|"medication JSON array"| UI
+  UI -.->|anonymous stats| TE
 ```
 
-| Pass | Model | Role |
-|------|--------|------|
-| 1 | `deepseek-ocr-2` | Full-page transcription; every drug line preserved |
-| 2 | `qwen3.5-122b` | Visual inventory of medicines on the image |
+| Pass | Model (defaults) | Role |
+|------|------------------|------|
+| 1 | `deepseek-ocr-2` | Full-page transcription; high **`max_tokens`** to limit `finish_reason=length` cutoffs |
+| 2 | `qwen3.5-122b` (override with **`VITE_VLM_MODEL`**) | Visual inventory / numbered lines on the image |
 | 3 | `Llama-3.3-70B-Instruct` | Merge reports + fuzzy hints → **one JSON object per medicine** |
 
 ---
@@ -138,16 +148,18 @@ flowchart TB
   end
   subgraph application["Application / domain (client)"]
     C["Image pipeline: imageProcessing.js"]
-    D["API client: regoloApi.js"]
+    D["API client: regoloApi.js + telemetryApi.js"]
     E["Normalization: prescriptionHelpers.js"]
     F["Prompts: prompts.js"]
+    FH["FHIR export: fhirExport.js"]
   end
   subgraph reference["Reference data (client-side, static)"]
     G["medicineDb.js → MEDICINE_DB"]
     H["fuzzyMatch.js"]
+    PK["pakistanHealthResources.js"]
   end
   subgraph infrastructure["Infrastructure"]
-    I["server.js → Regolo proxy"]
+    I["server.js → Regolo proxy + telemetry"]
     J["vite.config.js → /proxy rewrite"]
   end
   subgraph external["External services"]
@@ -174,14 +186,17 @@ sequenceDiagram
   participant Regolo as Regolo API
   participant Fuzz as MEDICINE_DB hints
   Browser->>Browser: Resize / compress image
-  Browser->>Proxy: Pass 1 vision OCR
-  Proxy->>Regolo: deepseek-ocr-2
-  Regolo-->>Proxy: OCR text
-  Proxy-->>Browser: Report A
-  Browser->>Proxy: Pass 2 vision VLM
-  Proxy->>Regolo: qwen3.5-122b
-  Regolo-->>Proxy: numbered drug lines
-  Proxy-->>Browser: Report B
+  par Pass 1 + 2 parallel
+    Browser->>Proxy: Vision OCR
+    Proxy->>Regolo: deepseek-ocr-2
+    Regolo-->>Proxy: Report A
+    Proxy-->>Browser: Report A
+  and
+    Browser->>Proxy: Vision VLM
+    Proxy->>Regolo: VLM model (default qwen3.5-122b)
+    Regolo-->>Proxy: Report B
+    Proxy-->>Browser: Report B
+  end
   Browser->>Fuzz: scanForMedicines A+B
   Fuzz-->>Browser: candidate brand strings
   Browser->>Proxy: Pass 3 chat consolidation
@@ -320,6 +335,7 @@ This hackathon MVP is **serverless for patient data**: there is **no PostgreSQL 
 |--------|------|----------|----------------|
 | **Medicine hint DB** | Static **reference** data (file-backed) | `src/data/medicineDb.js` | Brand ↔ generic pairs for **fuzzy OCR spelling hints** (not a full drug formulary). |
 | **Scan history (optional)** | **Browser** key–value | `localStorage` key `sehat_history` | Reserved / future use; parsed history not wired to full UI in current build. |
+| **Scan telemetry (optional)** | File on disk (server) | `data/scan-stats.json` (under repo `data/`, typically **gitignored**) | Anonymous **session**, **tools page opens**, **scan success/fail** counts (resets on some PaaS without a volume). |
 | **Session state** | In-memory | `main.js` `state` object | Current image, OCR text, medications[], UI flags (lost on refresh). |
 | **Secrets** | Environment | `.env` (see `.env.example`; **recommended** not to publish real keys in public repos) | `REGOLO_API_KEY` for the machine running `server.js`. |
 | **Model responses** | Transient | RAM / network | JSON from Llama pass drives the results screen. |
@@ -381,12 +397,15 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 ## Feature highlights (evaluation checklist)
 
 - [x] 📷 **Camera / file upload** + optional demo image
-- [x] ⚙️ **Three-phase processing UI** (Urdu + English friendly copy)
+- [x] ⚙️ **Processing UI**: steps 1–2 run **in parallel** (Urdu + English copy); step 3 consolidation
 - [x] 💊 Per-medicine cards: raw snippet, purpose, usage, **schedule decoded**, timing, **cost**, alternatives
 - [x] 📊 **Results dashboard**: medicine count, indicative total PKR band, **per-drug cost bar chart**
 - [x] 🔊 **TTS** for hear-aloud instructions
-- [x] 🖼️ **Client-side image prep** before API (`src/utils/imageProcessing.js`)
-- [x] 🔐 **Proxy** keeps API keys off the browser; Vite dev server forwards `/proxy` → Express
+- [x] 🖼️ **Client-side image prep** before API (`imageProcessing.js` — resize/compress for vision payloads)
+- [x] 🔐 **Proxy** keeps API keys off the browser; **IPv4 HTTPS first** to Regolo; long configurable timeouts (**`REGOLO_FETCH_TIMEOUT_MS`**) for slow VLMs
+- [x] 📲 **WhatsApp** share, **FHIR JSON** export, simple vs detailed results
+- [x] 🩺 **صحت ٹولز**: BMI, BP diary, ORS guide, helplines; **anonymous telemetry** (sessions, tools opens, scan success/fail) + chart
+- [x] 🚂 **Railway-ready**: `railway.toml` build + **`node server.js`** start + `/proxy/health`
 
 ---
 
@@ -394,9 +413,9 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 
 | Layer | Choice |
 |--------|--------|
-| Front-end | Vanilla ES modules, **Vite 6** |
+| Front-end | Vanilla ES modules, **Vite 6**, **Chart.js** (tools analytics) |
 | Styling | Custom CSS (Urdu font: Noto Nastaliq via Google Fonts) |
-| Back-end | **Express 5** proxy to Regolo OpenAI-compatible API |
+| Back-end | **Express 5** — Regolo OpenAI-compatible proxy, **anonymous telemetry** (`/proxy/telemetry/*`), static SPA from `dist/` |
 | Config | `src/config.js`, `dotenv` on server |
 | Package manager | npm |
 
@@ -407,21 +426,31 @@ Fields are produced by the consolidation pass and normalized in `prescriptionHel
 ```
 ├── index.html
 ├── package.json
-├── server.js              # API proxy (REGOLO_API_KEY)
+├── server.js              # Regolo proxy + telemetry + static dist
 ├── vite.config.js         # dev server + /proxy rewrite
-├── public/
-│   └── pakistan-map.svg   # literacy visual (hero)
-├── src/
-│   ├── main.js            # UI, pipeline orchestration, results dashboard
-│   ├── style.css
-│   ├── config.js
-│   ├── data/medicineDb.js  # ~2,272 brand↔generic rows (fuzzy hints, not prices)
-│   ├── services/          # regoloApi, tts
-│   └── utils/             # prompts, imageProcessing, fuzzyMatch, prescriptionHelpers
-├── railway.toml           # Railway: build + start + healthcheck
-├── DEPLOY_RAILWAY.md      # Railway deploy steps
+├── railway.toml           # Railway: build + node start + healthcheck
+├── .env.example           # REGOLO_*, VITE_*, timeouts, optional VLM model
+├── DEPLOY_RAILWAY.md
 ├── TECHNICAL_REPRODUCTION_GUIDE.md
-├── PRODUCT_SPECIFICATION.md         # cover + team v1.0
+├── PRODUCT_SPECIFICATION.md
+├── public/
+│   └── pakistan-map.svg
+├── src/
+│   ├── main.js            # UI, pipeline (parallel OCR+VLM), results, tools
+│   ├── style.css
+│   ├── config.js          # models, API base, generation settings
+│   ├── data/
+│   │   ├── medicineDb.js
+│   │   ├── pakistanHealthResources.js
+│   │   └── orsGuide.js
+│   ├── services/
+│   │   ├── regoloApi.js   # /proxy/chat/completions client
+│   │   ├── telemetryApi.js
+│   │   ├── ocrService.js
+│   │   ├── ttsService.js
+│   │   ├── nerService.js
+│   │   └── …
+│   └── utils/             # prompts, imageProcessing, fuzzyMatch, fhirExport, prescriptionHelpers
 └── README.md
 ```
 
@@ -463,8 +492,14 @@ Other scripts:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `REGOLO_API_KEY` | **Yes** (server) | Bearer token for `https://api.regolo.ai/v1/chat/completions` |
-| `VITE_API_BASE_URL` | No | Override API base for split deployments |
+| `REGOLO_API_KEY` | **Yes** (server) | Bearer token for Regolo `…/chat/completions` |
+| `REGOLO_API_BASE_URL` | No | Override Regolo base URL (see `.env.example`) |
+| `REGOLO_FETCH_TIMEOUT_MS` | No | Per-request upstream wait (default **20 min**; cap **45 min** on server) |
+| `REGOLO_FETCH_RETRIES` | No | Retries when upstream connection fails (1–4, default 3) |
+| `VITE_API_BASE_URL` | No | API **origin** for split front/back deployments (app appends `/proxy`) |
+| `VITE_VLM_MODEL` | No | **Build-time** Regolo model id for **pass 2** (default `qwen3.5-122b`); use a smaller/faster id from your dashboard if needed |
+
+**Production (Railway):** set server vars in the service; set **`VITE_***`** before **build** if you override API base or VLM model. See **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**.
 
 ---
 

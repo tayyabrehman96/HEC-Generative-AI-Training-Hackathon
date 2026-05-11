@@ -1,7 +1,7 @@
 {
   "name": "sehat-saathi",
   "version": "1.0.0",
-  "description": "Sehat Saathi — AI-Powered Prescription Intelligence for Pakistan",
+  "description": "Sehat Saathi (صحت ساتھی) — Pakistani Rx photo to Urdu-friendly medicine cards: parallel DeepSeek OCR + vision VLM + Llama JSON via Regolo, Express proxy, Railway-ready, health tools & analytics.",
   "type": "module",
   "scripts": {
     "dev": "vite",
