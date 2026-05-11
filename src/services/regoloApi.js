@@ -114,10 +114,16 @@ export async function chatCompletion(model, messages, settings = {}) {
       }),
     });
   } catch (err) {
-    console.error('[Regolo] Fetch failed:', err);
-    throw new Error(
-      'Cannot reach the API proxy. Start it with REGOLO_API_KEY in .env: run `npm run proxy` or `npm run dev:all`, restart `npm run dev`, then retry.'
-    );
+    const detail = err?.message ?? String(err);
+    const base = String(CONFIG.API_BASE_URL ?? '/proxy');
+    console.error('[Regolo] Fetch failed:', detail, '→', `${base}/chat/completions`);
+    const isLocalhost =
+      typeof window !== 'undefined' &&
+      (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    const hint = isLocalhost
+      ? 'Locally: run `npm run dev:all` (or `npm run proxy` in one terminal + `npm run dev` in another) and ensure `.env` has REGOLO_API_KEY.'
+      : 'Production: open the app from the same host that serves `/proxy` (e.g. your Railway URL). If the UI is on another domain, build with `VITE_API_BASE_URL=https://your-backend.example.com` (see `.env.example`).';
+    throw new Error(`Cannot reach the API proxy (${detail}). ${hint}`);
   }
 
   const rawText = await response.text();

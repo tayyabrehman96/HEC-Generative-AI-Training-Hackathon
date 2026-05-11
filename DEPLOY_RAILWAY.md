@@ -13,6 +13,7 @@ One **Web Service** serves the **Vite build** (`dist/`) and the **`/proxy`** API
 2. Railway loads **`railway.toml`** (Nixpacks build + `npm start` + health check on **`/proxy/health`**).
 3. Open the service → **Variables** → add:
    - **`REGOLO_API_KEY`** = your secret (required).
+   - **Do not** set `VITE_API_BASE_URL` unless the browser loads the UI from a **different host** than the API; if unset, the app uses same-origin **`/proxy`**. If you must set it, use your API origin only (e.g. `https://your-service.up.railway.app`) — the client appends **`/proxy`** automatically.
 4. **Deploy** (or push to `main` to trigger a rebuild). Wait for **Build** then **Deploy** to succeed.  
    - If Railway uses **Railpack** by default and the build skips Vite, open the service **Settings** and set **Builder** to **Nixpacks**, or set the **Build command** manually to:  
      `npm install --include=dev && npm run build`

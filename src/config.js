@@ -3,10 +3,36 @@
  * Regolo AI API settings and model configuration
  */
 
+/** Empty or wrong API base breaks fetch (e.g. "/chat/completions" instead of "/proxy/..."). */
+function normalizeApiBaseUrl(raw) {
+  const isEmpty = raw == null || String(raw).trim() === '';
+  let v = isEmpty ? '/proxy' : String(raw).trim();
+
+  if (/^https?:\/\//i.test(v)) {
+    try {
+      const u = new URL(v);
+      let path = u.pathname.replace(/\/+$/, '');
+      if (path === '') path = '/';
+      const segments = path.split('/').filter(Boolean);
+      const last = segments[segments.length - 1];
+      if (last !== 'proxy') {
+        path = path === '/' ? '/proxy' : `${path}/proxy`;
+      }
+      return `${u.origin}${path}`.replace(/\/+$/, '');
+    } catch {
+      return '/proxy';
+    }
+  }
+
+  if (!v.startsWith('/')) v = `/${v}`;
+  v = v.replace(/\/+$/, '');
+  return v || '/proxy';
+}
+
 export const CONFIG = {
-  // Same-origin /proxy in dev/preview (Vite forwards to Express). Override when deploying front-end separately:
-  // build with VITE_API_BASE_URL=https://your-host/proxy
-  API_BASE_URL: import.meta.env.VITE_API_BASE_URL ?? '/proxy',
+  // Same-origin `/proxy` in production (Express). Dev: Vite proxies `/proxy` → Express.
+  // Split deploy: set VITE_API_BASE_URL=https://your-api.example.com (origin only is OK — `/proxy` is appended).
+  API_BASE_URL: normalizeApiBaseUrl(import.meta.env.VITE_API_BASE_URL),
 
   // Models
   OCR_MODEL: 'deepseek-ocr-2',

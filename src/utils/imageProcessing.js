@@ -18,7 +18,8 @@ export function fileToBase64(file) {
 /**
  * Process image: fix orientation, resize, and optimize for OCR
  */
-export async function processImage(dataUrl, maxWidth = 2560, quality = 0.92) {
+/** Slightly smaller default keeps vision POST under typical proxy limits (Railway/browser). */
+export async function processImage(dataUrl, maxWidth = 2048, quality = 0.86) {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onerror = () => {
