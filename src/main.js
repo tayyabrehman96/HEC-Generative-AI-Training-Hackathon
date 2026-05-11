@@ -13,6 +13,7 @@ import { normalizeMedication, aggregateCostStats } from './utils/prescriptionHel
 import { HEALTH_FEED_ITEMS, renderHealthFeedCard, getProcessingFeedDateLineHtml } from './data/healthFeed.js';
 import { checkInteractions, getSeverityLevel } from './services/interactionService.js';
 import { computeBmi, bmiCategory, PAKISTAN_HELPLINES } from './data/healthTools.js';
+import { buildWhatsAppSummaryText, openWhatsAppWithText } from './utils/shareAndSchedule.js';
 
 // ===== State =====
 let state = {
@@ -29,6 +30,8 @@ let state = {
   speakingIndex: -1,
   ttsSession: 0,
   history: JSON.parse(localStorage.getItem('sehat_history') || '[]'),
+  /** Fewer fields on cards + hide chart — UI only, does not change AI pipeline */
+  resultsSimpleMode: localStorage.getItem('sehat_simple_results') === '1',
 };
 
 /** Cleared when leaving the processing screen */
@@ -504,19 +507,29 @@ function renderResults() {
       : '';
 
   const costAgg = aggregateCostStats(state.medications);
+  const simpleClass = state.resultsSimpleMode ? ' results-section--simple' : '';
 
   app.innerHTML = `
     ${renderHeader()}
     <div class="container container-results">
-      <section class="results-section results-enter">
+      <section class="results-section results-enter${simpleClass}">
         <div class="results-header" style="margin-bottom:2rem">
           <div>
             <h2 style="margin-bottom:0.25rem">📋 آپ کا تجزیہ تیار ہے</h2>
             <p style="color:var(--text-muted); font-size:0.85rem; font-weight:400">ہر دوا پر تھپتھپا کر کھولیں — 🔊 سن بھی سکتے ہیں</p>
           </div>
-          <button type="button" class="btn btn-secondary" id="newScanBtn" style="width:auto">New Scan</button>
+          <div class="results-header__actions">
+            <button type="button" class="btn btn-secondary" id="toggleSimpleResultsBtn" style="width:auto" title="Simple view hides extra blocks">
+              ${state.resultsSimpleMode ? '📑 مکمل تفصیل / Full detail' : '✨ آسان منظر / Simple view'}
+            </button>
+            <button type="button" class="btn btn-secondary" id="shareWhatsappBtn" style="width:auto" ${state.medications.length ? '' : 'disabled'} title="Share summary on WhatsApp">
+              📲 WhatsApp
+            </button>
+            <button type="button" class="btn btn-secondary" id="newScanBtn" style="width:auto">New Scan</button>
+          </div>
         </div>
         ${state.medications.length ? renderResultsDashboard(state.medications, costAgg) : ''}
+        ${state.medications.length ? renderDailyRoutineStrip(state.medications) : ''}
         ${renderInteractionsPanel()}
         <div class="drug-cards drug-cards--results">
           ${emptyAnalysis}
@@ -651,6 +664,31 @@ function renderTools() {
     }
     el.innerHTML = `<strong>BMI: ${escapeHtml(String(bmi))}</strong> — ${escapeHtml(cat.en)} / <span dir="rtl">${escapeHtml(cat.ur)}</span>`;
   });
+}
+
+/** Quick-read list from existing med fields only — no extra model calls. */
+function renderDailyRoutineStrip(medications) {
+  if (!medications.length) return '';
+  const items = medications
+    .map((med, i) => {
+      const name = String(med.brand_name || med.name || '').trim() || `دوا ${i + 1}`;
+      const timing = String(med.timing || '').trim();
+      const usage = String(med.usage_instructions || '').trim();
+      const timingOk = timing && timing !== '—';
+      const usageOk = usage && usage !== '—';
+      return `<li class="daily-routine__item">
+        <div class="daily-routine__line"><span class="daily-routine__n">${i + 1}</span><strong class="daily-routine__name" dir="auto">${escapeHtml(name)}</strong></div>
+        ${timingOk ? `<div class="daily-routine__meta" dir="auto"><span class="daily-routine__lbl">وقت / Timing:</span> ${escapeHtml(timing)}</div>` : ''}
+        ${usageOk ? `<div class="daily-routine__sub" dir="rtl">${escapeHtml(usage)}</div>` : ''}
+      </li>`;
+    })
+    .join('');
+  return `
+    <div class="daily-routine-card" role="region" aria-label="Medicines list summary">
+      <h3 class="daily-routine__title">📋 فوری فہرست — Quick list</h3>
+      <p class="daily-routine__hint">مکمل تفصیل اور سننے کے لیے نیچے ہر کارڈ کھولیں — Open each card below for detail and 🔊</p>
+      <ol class="daily-routine__list">${items}</ol>
+    </div>`;
 }
 
 function renderResultsDashboard(medications, costAgg) {
@@ -930,6 +968,20 @@ function setupResultEvents() {
       });
     });
   });
+
+  document.getElementById('toggleSimpleResultsBtn').addEventListener('click', () => {
+    state.resultsSimpleMode = !state.resultsSimpleMode;
+    localStorage.setItem('sehat_simple_results', state.resultsSimpleMode ? '1' : '0');
+    render();
+  });
+
+  const shareBtn = document.getElementById('shareWhatsappBtn');
+  if (shareBtn && !shareBtn.disabled) {
+    shareBtn.addEventListener('click', () => {
+      const text = buildWhatsAppSummaryText(state.medications, state.interactions);
+      openWhatsAppWithText(text);
+    });
+  }
 
   document.getElementById('newScanBtn').addEventListener('click', () => {
     stop();
