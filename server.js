@@ -17,7 +17,17 @@ const regoloIpv4Agent = new https.Agent({ family: 4, keepAlive: true, maxSockets
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-const REGOLO_API_KEY = process.env.REGOLO_API_KEY?.trim();
+/** Strip accidental `Bearer ` / wrapping quotes / CR — Regolo expects raw `sk-…` in Authorization: Bearer … */
+function normalizeRegoloApiKey(raw) {
+  let k = String(raw ?? '').trim();
+  if (!k) return '';
+  if ((k.startsWith('"') && k.endsWith('"')) || (k.startsWith("'") && k.endsWith("'"))) k = k.slice(1, -1).trim();
+  if (k.toLowerCase().startsWith('bearer ')) k = k.slice(7).trim();
+  k = k.replace(/\s+/g, '');
+  return k;
+}
+
+const REGOLO_API_KEY = normalizeRegoloApiKey(process.env.REGOLO_API_KEY);
 if (!REGOLO_API_KEY) {
   console.error('Missing REGOLO_API_KEY. Copy .env.example to .env and set your key.');
   process.exit(1);

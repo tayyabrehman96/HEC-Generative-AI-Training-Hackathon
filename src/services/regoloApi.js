@@ -148,8 +148,14 @@ export async function chatCompletion(model, messages, settings = {}) {
     const hint = networkHint
       ? ' (Host-to-Regolo connection failed — set REGOLO_API_KEY in Railway Variables, redeploy, and check server logs.)'
       : '';
+    const authHint =
+      response.status === 401
+        ? ' Fix: use a valid Regolo API key (raw sk-… only, no "Bearer " in .env). Set REGOLO_API_KEY in Railway Variables or .env and redeploy.'
+        : '';
     throw new Error(
-      cause ? `Regolo API Error (${response.status}): ${detail} — ${cause}${hint}` : `Regolo API Error (${response.status}): ${detail}${hint}`
+      cause
+        ? `Regolo API Error (${response.status}): ${detail} — ${cause}${hint}${authHint}`
+        : `Regolo API Error (${response.status}): ${detail}${hint}${authHint}`
     );
   }
 

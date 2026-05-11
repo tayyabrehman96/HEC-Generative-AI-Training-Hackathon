@@ -46,5 +46,6 @@ Railway uses **usage-based** billing with a **trial / credit** tier; monitor usa
 | Service crashes on start | **REGOLO_API_KEY** set; logs for `Missing REGOLO_API_KEY`. |
 | 404 on `/` | Build must produce `dist/index.html`; check build logs. |
 | API errors | Regolo quota, key validity, and request size (large images). |
+| **401 Authentication Error** / “Invalid proxy server token” | **Regolo rejected the key** (revoked, typo, wrong project, or `Bearer` duplicated in `.env`). Use **only** the raw key (`sk-…`) in `REGOLO_API_KEY` — no `Bearer ` prefix, no quotes. Create a **new key** in the [Regolo dashboard](https://regolo.ai/) and set it in **Railway → Variables** and local `.env`; rotate if the old key was shared. |
 | **`fetch failed`** / proxy **500** with `cause` in JSON | This is a **network path** error from Railway to `api.regolo.ai`, not the browser. Confirm **`REGOLO_API_KEY`** is set only in **Railway → Variables** (never rely on committing `.env`). Redeploy so the server uses the **IPv4 HTTPS fallback**; read deploy logs for `fetch` / `https-ipv4` lines and `code=` / `errno=`. |
 | **Timeout** / `aborted due to timeout` | Large models (e.g. `qwen3.5-122b`) often need **>3 minutes**. Set **`REGOLO_FETCH_TIMEOUT_MS`** (e.g. `600000` for 10 min, max ~30 min) on Railway. |
