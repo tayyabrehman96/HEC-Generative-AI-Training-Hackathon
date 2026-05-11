@@ -1,4 +1,5 @@
-# .env is tracked for this hackathon repo (rotate keys if repo becomes public)
+# Secrets — do not commit. Use Railway **Variables** or a local `.env` (untracked).
+.env
 .env.local
 .env.*.local
 node_modules/

@@ -1,10 +1,19 @@
 import 'dotenv/config';
+import dns from 'node:dns';
 import fs from 'fs';
+import https from 'node:https';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { URL } from 'node:url';
 import express from 'express';
 import cors from 'cors';
 import bodyParser from 'body-parser';
+
+// Many PaaS hosts prefer IPv6 first; if the upstream only answers on IPv4, fetch throws "fetch failed".
+dns.setDefaultResultOrder('ipv4first');
+
+/** Force IPv4 — more reliable than undici/fetch alone on some Railway/container networks. */
+const regoloIpv4Agent = new https.Agent({ family: 4, keepAlive: true, maxSockets: 16 });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -13,6 +22,10 @@ if (!REGOLO_API_KEY) {
   console.error('Missing REGOLO_API_KEY. Copy .env.example to .env and set your key.');
   process.exit(1);
 }
+
+const REGOLO_BASE = String(process.env.REGOLO_API_BASE_URL ?? 'https://api.regolo.ai/v1').replace(/\/+$/, '');
+const REGOLO_CHAT_URL = `${REGOLO_BASE}/chat/completions`;
+const REGOLO_FETCH_RETRIES = Math.min(4, Math.max(1, Number(process.env.REGOLO_FETCH_RETRIES ?? 3) || 3));
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -32,6 +45,116 @@ app.get('/proxy/health', (_req, res) => {
   });
 });
 
+function logAttemptFailure(label, err, attempt) {
+  const detail = serializeErrorChain(err);
+  console.error(`[Proxy] ${label} attempt ${attempt} failed:`, detail);
+}
+
+/** Walk Error/cause/aggregate to surface errno/code (shows in logs and JSON `detail`). */
+function serializeErrorChain(err) {
+  if (!err) return 'unknown error';
+  const parts = [];
+  const seen = new Set();
+  let e = err;
+  let depth = 0;
+  while (e && typeof e === 'object' && depth < 8) {
+    if (seen.has(e)) break;
+    seen.add(e);
+    if (typeof e.message === 'string' && e.message.trim()) parts.push(e.message.trim());
+    if (typeof e.code === 'string') parts.push(`code=${e.code}`);
+    if (e.errno != null) parts.push(`errno=${e.errno}`);
+    if (typeof e.syscall === 'string') parts.push(`syscall=${e.syscall}`);
+    if (Array.isArray(e.errors)) {
+      for (const sub of e.errors.slice(0, 3)) {
+        if (sub && typeof sub.message === 'string') parts.push(`aggregate:${sub.message}`);
+      }
+    }
+    e = e.cause;
+    depth++;
+  }
+  return [...new Set(parts)].join(' | ') || String(err);
+}
+
+function httpsPostIpv4(urlString, headers, bodyString) {
+  const url = new URL(urlString);
+  const bodyBuf = Buffer.from(bodyString, 'utf8');
+  const reqHeaders = {
+    ...headers,
+    'Content-Length': bodyBuf.length,
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: url.hostname,
+        port: url.port || 443,
+        path: `${url.pathname}${url.search}`,
+        method: 'POST',
+        agent: regoloIpv4Agent,
+        headers: reqHeaders,
+      },
+      (res) => {
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => {
+          resolve({
+            statusCode: res.statusCode ?? 502,
+            body: Buffer.concat(chunks).toString('utf8'),
+          });
+        });
+      }
+    );
+    req.on('error', reject);
+    req.write(bodyBuf);
+    req.end();
+  });
+}
+
+/** POST to Regolo: try fetch first, then IPv4 https (same path many hosts need on Railway). */
+async function postRegoloChat(openAiBody) {
+  const payload = JSON.stringify(openAiBody);
+  const reqHeaders = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    Authorization: `Bearer ${REGOLO_API_KEY}`,
+    'User-Agent': 'SehatSaathi-Proxy/1.0',
+  };
+
+  let lastThrow = null;
+
+  for (let attempt = 1; attempt <= REGOLO_FETCH_RETRIES; attempt++) {
+    try {
+      const response = await fetch(REGOLO_CHAT_URL, {
+        method: 'POST',
+        headers: reqHeaders,
+        body: payload,
+        signal: AbortSignal.timeout(180_000),
+      });
+      const rawText = await response.text();
+      return { status: response.status, rawText };
+    } catch (fetchErr) {
+      logAttemptFailure('fetch', fetchErr, attempt);
+      try {
+        const { statusCode, body } = await httpsPostIpv4(REGOLO_CHAT_URL, reqHeaders, payload);
+        return { status: statusCode, rawText: body };
+      } catch (httpsErr) {
+        logAttemptFailure('https-ipv4', httpsErr, attempt);
+        const combined = new Error(
+          `Regolo unreachable (fetch and IPv4 HTTPS failed). fetch: ${serializeErrorChain(fetchErr)}; https: ${serializeErrorChain(httpsErr)}`
+        );
+        combined.cause = httpsErr;
+        lastThrow = combined;
+      }
+    }
+
+    if (attempt < REGOLO_FETCH_RETRIES) {
+      await new Promise((r) => setTimeout(r, 800 * attempt));
+    }
+  }
+
+  throw lastThrow ?? new Error('Regolo request failed after retries');
+}
+
 app.post('/proxy/chat/completions', async (req, res) => {
   const { body } = req.body ?? {};
 
@@ -42,25 +165,17 @@ app.post('/proxy/chat/completions', async (req, res) => {
   console.log(`\n[Proxy] Requesting model: ${body.model}`);
 
   try {
-    const response = await fetch('https://api.regolo.ai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${REGOLO_API_KEY}`,
-      },
-      body: JSON.stringify(body),
-    });
+    const { status, rawText } = await postRegoloChat(body);
 
-    console.log(`[Proxy] Response status: ${response.status}`);
+    console.log(`[Proxy] Response status: ${status}`);
 
-    const rawText = await response.text();
     let data;
     try {
       data = JSON.parse(rawText);
     } catch {
       const snippet = rawText.slice(0, 800);
       console.error('[Proxy] Non-JSON upstream body (start):', snippet);
-      return res.status(response.status >= 400 ? response.status : 502).json({
+      return res.status(status >= 400 ? status : 502).json({
         error: 'Upstream returned non-JSON response',
         snippet,
       });
@@ -68,10 +183,14 @@ app.post('/proxy/chat/completions', async (req, res) => {
 
     console.log(`[Proxy] Response Content (start):`, JSON.stringify(data).substring(0, 500));
 
-    res.status(response.status).json(data);
+    res.status(status).json(data);
   } catch (error) {
-    console.error('[Proxy] Fetch Error:', error.message);
-    res.status(500).json({ error: error.message });
+    const detail = serializeErrorChain(error);
+    console.error('[Proxy] Regolo connection error:', detail);
+    res.status(500).json({
+      error: error?.message ?? 'Regolo request failed',
+      cause: detail,
+    });
   }
 });
 
@@ -90,4 +209,5 @@ if (hasFrontend) {
 
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Sehat Saathi listening on port ${PORT}${hasFrontend ? ' (SPA + /proxy)' : ' (proxy only)'}`);
+  console.log(`[Proxy] Regolo upstream: ${REGOLO_CHAT_URL}`);
 });

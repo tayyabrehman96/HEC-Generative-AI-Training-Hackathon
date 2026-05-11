@@ -9,24 +9,66 @@ import { CONFIG } from '../config.js';
  * Verify Vite dev proxy can reach Express (does not call Regolo).
  */
 export async function checkProxyHealth() {
-  const url = `${CONFIG.API_BASE_URL}/health`;
+  const base = String(CONFIG.API_BASE_URL ?? '/proxy').replace(/\/+$/, '');
+  const url = `${base}/health`;
   try {
     const response = await fetch(url, { method: 'GET' });
+    const raw = await response.text();
+    let data;
+    try {
+      data = raw ? JSON.parse(raw) : {};
+    } catch {
+      data = { _rawSnippet: raw.slice(0, 280) };
+    }
+
     if (!response.ok) {
+      const upstream =
+        typeof data.error === 'string'
+          ? data.error
+          : typeof data.snippet === 'string'
+            ? data.snippet
+            : typeof data.message === 'string'
+              ? data.message
+              : null;
+      const detail = upstream ?? (data._rawSnippet ? `${data._rawSnippet}` : null);
+
+      let error;
+      if (response.status === 404) {
+        error =
+          'Proxy returned 404 on /proxy/health — stop old Node processes, free port 3001, then run `npm run dev:all`.';
+      } else if (response.status === 503 || data.service === 'vite-proxy-bridge') {
+        error =
+          upstream ??
+          'Vite cannot reach Express on port 3001. Start `npm run proxy` (or `npm run dev:all`) with REGOLO_API_KEY in `.env`.';
+      } else if (response.status === 500) {
+        error =
+          upstream ??
+          (detail?.trim()
+            ? `Proxy health check HTTP 500: ${detail.trim()}`
+            : `HTTP 500 from ${url}. Another process may be using port 3001 (not Sehat Saathi's Express). Confirm \`curl http://127.0.0.1:3001/proxy/health\` returns JSON with "service":"sehat-saathi-proxy".`);
+      } else {
+        error =
+          upstream ?? `Proxy health check failed (HTTP ${response.status})${detail ? `: ${detail}` : ''}`;
+      }
+
+      return { ok: false, error };
+    }
+
+    if (data.service !== 'sehat-saathi-proxy' || data.ok !== true) {
       return {
         ok: false,
         error:
-          response.status === 404
-            ? 'Proxy returned 404 on /proxy/health — stop old Node processes and run npm run dev:all again.'
-            : `Proxy health check failed (HTTP ${response.status}).`,
+          typeof data.error === 'string'
+            ? data.error
+            : `Port 3001 returned HTTP 200 but not Sehat Saathi health JSON (${url}). Another process may occupy 3001; stop it or set PORT in .env and redeploy.`,
       };
     }
-    await response.json().catch(() => ({}));
+
     return { ok: true };
   } catch (err) {
     return {
       ok: false,
-      error: `Cannot reach ${url}. Run npm run dev:all (or npm run proxy + npm run dev) and keep port 3001 free.`,
+      error: `Cannot reach ${url}: ${err?.message ?? err}. Run \`npm run dev:all\` (or \`npm run proxy\` + \`npm run dev\`).`,
     };
   }
 }
@@ -95,7 +137,20 @@ export async function chatCompletion(model, messages, settings = {}) {
         : typeof data.error?.message === 'string'
           ? data.error.message
           : data.snippet ?? JSON.stringify(data);
-    throw new Error(`Regolo API Error (${response.status}): ${detail}`);
+    const cause =
+      typeof data.cause === 'string' && data.cause.trim()
+        ? data.cause.trim()
+        : null;
+    const blob = `${detail} ${cause ?? ''}`;
+    const networkHint =
+      response.status === 500 &&
+      /fetch failed|unreachable|ECONN|ENOTFOUND|ETIMEDOUT|certificate|TLS|socket/i.test(blob);
+    const hint = networkHint
+      ? ' (Host-to-Regolo connection failed — set REGOLO_API_KEY in Railway Variables, redeploy, and check server logs.)'
+      : '';
+    throw new Error(
+      cause ? `Regolo API Error (${response.status}): ${detail} — ${cause}${hint}` : `Regolo API Error (${response.status}): ${detail}${hint}`
+    );
   }
 
   console.log(`[Regolo] ${model} response:`, data);

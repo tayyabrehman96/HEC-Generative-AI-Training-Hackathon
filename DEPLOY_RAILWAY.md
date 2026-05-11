@@ -46,3 +46,4 @@ Railway uses **usage-based** billing with a **trial / credit** tier; monitor usa
 | Service crashes on start | **REGOLO_API_KEY** set; logs for `Missing REGOLO_API_KEY`. |
 | 404 on `/` | Build must produce `dist/index.html`; check build logs. |
 | API errors | Regolo quota, key validity, and request size (large images). |
+| **`fetch failed`** / proxy **500** with `cause` in JSON | This is a **network path** error from Railway to `api.regolo.ai`, not the browser. Confirm **`REGOLO_API_KEY`** is set only in **Railway → Variables** (never rely on committing `.env`). Redeploy so the server uses the **IPv4 HTTPS fallback**; read deploy logs for `fetch` / `https-ipv4` lines and `code=` / `errno=`. |
