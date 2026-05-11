@@ -10,7 +10,7 @@ One **Web Service** serves the **Vite build** (`dist/`) and the **`/proxy`** API
 ## Steps
 
 1. **[railway.app](https://railway.app)** → **New Project** → **Deploy from GitHub repo** → select this repository.
-2. Railway loads **`railway.toml`** (Nixpacks build + `npm start` + health check on **`/proxy/health`**).
+2. Railway loads **`railway.toml`** (Nixpacks build + **`node server.js`** start + health check on **`/proxy/health`**).
 3. Open the service → **Variables** → add:
    - **`REGOLO_API_KEY`** = your secret (required).
    - **Do not** set `VITE_API_BASE_URL` unless the browser loads the UI from a **different host** than the API; if unset, the app uses same-origin **`/proxy`**. If you must set it, use your API origin only (e.g. `https://your-service.up.railway.app`) — the client appends **`/proxy`** automatically.
@@ -49,5 +49,5 @@ Railway uses **usage-based** billing with a **trial / credit** tier; monitor usa
 | 404 on `/` | Build must produce `dist/index.html`; check build logs. |
 | API errors | Regolo quota, key validity, and request size (large images). |
 | **401 Authentication Error** / “Invalid proxy server token” | **Regolo rejected the key** (revoked, typo, wrong project, or `Bearer` duplicated in `.env`). Use **only** the raw key (`sk-…`) in `REGOLO_API_KEY` — no `Bearer ` prefix, no quotes. Create a **new key** in the [Regolo dashboard](https://regolo.ai/) and set it in **Railway → Variables** and local `.env`; rotate if the old key was shared. |
-| **`fetch failed`** / proxy **500** with `cause` in JSON | This is a **network path** error from Railway to `api.regolo.ai`, not the browser. Confirm **`REGOLO_API_KEY`** is set only in **Railway → Variables** (never rely on committing `.env`). Redeploy so the server uses the **IPv4 HTTPS fallback**; read deploy logs for `fetch` / `https-ipv4` lines and `code=` / `errno=`. |
-| **Timeout** / `aborted due to timeout` | Large models (e.g. `qwen3.5-122b`) often need **>3 minutes**. Set **`REGOLO_FETCH_TIMEOUT_MS`** (e.g. `600000` for 10 min, max ~30 min) on Railway. |
+| **`fetch failed`** / **`UND_ERR_HEADERS_TIMEOUT`** / proxy **500** with `cause` in JSON | Railway → Regolo network path. The proxy uses **IPv4 HTTPS first** (avoids Node **fetch** / Undici’s default **~5 min headers** limit). Redeploy; set **`REGOLO_FETCH_TIMEOUT_MS`** higher if large models still need more time. Check logs for **`https-ipv4`** / **`fetch`** lines and `code=` / `errno=`. |
+| **Timeout** / `aborted due to timeout` | Large models (e.g. `qwen3.5-122b`) often need **several minutes**. Set **`REGOLO_FETCH_TIMEOUT_MS`** (e.g. `600000` for 10 min, max ~30 min) on Railway. |

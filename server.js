@@ -285,7 +285,12 @@ function httpsPostIpv4(urlString, headers, bodyString, timeoutMs) {
   });
 }
 
-/** POST to Regolo: try fetch first, then IPv4 https (same path many hosts need on Railway). */
+/**
+ * POST to Regolo: IPv4 HTTPS first — Node `fetch` (Undici) uses a default ~5 min `headersTimeout`,
+ * so slow models can throw UND_ERR_HEADERS_TIMEOUT even when AbortSignal allows longer.
+ * Native https.request honors one deadline for the full response (aligned with REGOLO_FETCH_TIMEOUT_MS).
+ * Falls back to fetch for environments where HTTPS fails but fetch works.
+ */
 async function postRegoloChat(openAiBody) {
   const payload = JSON.stringify(openAiBody);
   const reqHeaders = {
@@ -299,25 +304,25 @@ async function postRegoloChat(openAiBody) {
 
   for (let attempt = 1; attempt <= REGOLO_FETCH_RETRIES; attempt++) {
     try {
-      const response = await fetch(REGOLO_CHAT_URL, {
-        method: 'POST',
-        headers: reqHeaders,
-        body: payload,
-        signal: AbortSignal.timeout(REGOLO_FETCH_TIMEOUT_MS),
-      });
-      const rawText = await response.text();
-      return { status: response.status, rawText };
-    } catch (fetchErr) {
-      logAttemptFailure('fetch', fetchErr, attempt);
+      const { statusCode, body } = await httpsPostIpv4(REGOLO_CHAT_URL, reqHeaders, payload, REGOLO_FETCH_TIMEOUT_MS);
+      return { status: statusCode, rawText: body };
+    } catch (httpsErr) {
+      logAttemptFailure('https-ipv4', httpsErr, attempt);
       try {
-        const { statusCode, body } = await httpsPostIpv4(REGOLO_CHAT_URL, reqHeaders, payload, REGOLO_FETCH_TIMEOUT_MS);
-        return { status: statusCode, rawText: body };
-      } catch (httpsErr) {
-        logAttemptFailure('https-ipv4', httpsErr, attempt);
+        const response = await fetch(REGOLO_CHAT_URL, {
+          method: 'POST',
+          headers: reqHeaders,
+          body: payload,
+          signal: AbortSignal.timeout(REGOLO_FETCH_TIMEOUT_MS),
+        });
+        const rawText = await response.text();
+        return { status: response.status, rawText };
+      } catch (fetchErr) {
+        logAttemptFailure('fetch', fetchErr, attempt);
         const combined = new Error(
-          `Regolo unreachable (fetch and IPv4 HTTPS failed). fetch: ${serializeErrorChain(fetchErr)}; https: ${serializeErrorChain(httpsErr)}`
+          `Regolo unreachable (IPv4 HTTPS and fetch failed). https: ${serializeErrorChain(httpsErr)}; fetch: ${serializeErrorChain(fetchErr)}`
         );
-        combined.cause = httpsErr;
+        combined.cause = fetchErr;
         lastThrow = combined;
       }
     }
