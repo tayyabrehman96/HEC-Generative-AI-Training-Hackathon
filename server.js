@@ -26,6 +26,11 @@ if (!REGOLO_API_KEY) {
 const REGOLO_BASE = String(process.env.REGOLO_API_BASE_URL ?? 'https://api.regolo.ai/v1').replace(/\/+$/, '');
 const REGOLO_CHAT_URL = `${REGOLO_BASE}/chat/completions`;
 const REGOLO_FETCH_RETRIES = Math.min(4, Math.max(1, Number(process.env.REGOLO_FETCH_RETRIES ?? 3) || 3));
+/** Large models + long OCR context often exceed 3m; cap at 30m for slow tiers. */
+const REGOLO_FETCH_TIMEOUT_MS = Math.min(
+  1_800_000,
+  Math.max(120_000, Number(process.env.REGOLO_FETCH_TIMEOUT_MS ?? 600_000) || 600_000),
+);
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3001;
@@ -75,7 +80,7 @@ function serializeErrorChain(err) {
   return [...new Set(parts)].join(' | ') || String(err);
 }
 
-function httpsPostIpv4(urlString, headers, bodyString) {
+function httpsPostIpv4(urlString, headers, bodyString, timeoutMs) {
   const url = new URL(urlString);
   const bodyBuf = Buffer.from(bodyString, 'utf8');
   const reqHeaders = {
@@ -84,7 +89,23 @@ function httpsPostIpv4(urlString, headers, bodyString) {
   };
 
   return new Promise((resolve, reject) => {
-    const req = https.request(
+    let settled = false;
+    let req;
+    let timer;
+
+    const finish = (fn, arg) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(arg);
+    };
+
+    timer = setTimeout(() => {
+      req?.destroy();
+      finish(reject, new Error(`Regolo HTTPS timeout after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    req = https.request(
       {
         hostname: url.hostname,
         port: url.port || 443,
@@ -97,14 +118,15 @@ function httpsPostIpv4(urlString, headers, bodyString) {
         const chunks = [];
         res.on('data', (c) => chunks.push(c));
         res.on('end', () => {
-          resolve({
+          finish(resolve, {
             statusCode: res.statusCode ?? 502,
             body: Buffer.concat(chunks).toString('utf8'),
           });
         });
+        res.on('error', (err) => finish(reject, err));
       }
     );
-    req.on('error', reject);
+    req.on('error', (err) => finish(reject, err));
     req.write(bodyBuf);
     req.end();
   });
@@ -128,14 +150,14 @@ async function postRegoloChat(openAiBody) {
         method: 'POST',
         headers: reqHeaders,
         body: payload,
-        signal: AbortSignal.timeout(180_000),
+        signal: AbortSignal.timeout(REGOLO_FETCH_TIMEOUT_MS),
       });
       const rawText = await response.text();
       return { status: response.status, rawText };
     } catch (fetchErr) {
       logAttemptFailure('fetch', fetchErr, attempt);
       try {
-        const { statusCode, body } = await httpsPostIpv4(REGOLO_CHAT_URL, reqHeaders, payload);
+        const { statusCode, body } = await httpsPostIpv4(REGOLO_CHAT_URL, reqHeaders, payload, REGOLO_FETCH_TIMEOUT_MS);
         return { status: statusCode, rawText: body };
       } catch (httpsErr) {
         logAttemptFailure('https-ipv4', httpsErr, attempt);
@@ -210,4 +232,5 @@ if (hasFrontend) {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`Sehat Saathi listening on port ${PORT}${hasFrontend ? ' (SPA + /proxy)' : ' (proxy only)'}`);
   console.log(`[Proxy] Regolo upstream: ${REGOLO_CHAT_URL}`);
+  console.log(`[Proxy] Upstream timeout: ${REGOLO_FETCH_TIMEOUT_MS}ms (REGOLO_FETCH_TIMEOUT_MS)`);
 });
