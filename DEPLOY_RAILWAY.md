@@ -21,6 +21,7 @@ One **Web Service** serves the **Vite build** (`dist/`) and the **`/proxy`** API
 ## Verify
 
 - Visit `https://<your-domain>/proxy/health` → JSON with `"ok": true`.  
+- Open **صحت ٹولز** → **شماریات** chart counts anonymous scan attempts on **this** server instance (resets on some host redeploys).
 - Open the site root → login flow → **Try Demo** or upload; scans should complete without CORS errors.
 
 ## Local “production” smoke test

@@ -46,6 +46,45 @@ const app = express();
 const PORT = Number(process.env.PORT) || 3001;
 const distDir = path.join(__dirname, 'dist');
 const hasFrontend = fs.existsSync(path.join(distDir, 'index.html'));
+const statsFile = path.join(__dirname, 'data', 'scan-stats.json');
+
+function emptyStats() {
+  return { total: 0, success: 0, failure: 0, byDay: {} };
+}
+
+function readScanStats() {
+  try {
+    const raw = fs.readFileSync(statsFile, 'utf8');
+    const data = JSON.parse(raw);
+    if (typeof data !== 'object' || data === null) return emptyStats();
+    return {
+      total: Number(data.total) || 0,
+      success: Number(data.success) || 0,
+      failure: Number(data.failure) || 0,
+      byDay: typeof data.byDay === 'object' && data.byDay !== null ? data.byDay : {},
+    };
+  } catch {
+    return emptyStats();
+  }
+}
+
+function writeScanStats(data) {
+  fs.mkdirSync(path.dirname(statsFile), { recursive: true });
+  fs.writeFileSync(statsFile, JSON.stringify(data), 'utf8');
+}
+
+function recordScanEvent(outcome) {
+  const s = readScanStats();
+  s.total += 1;
+  if (outcome === 'success') s.success += 1;
+  else s.failure += 1;
+  const day = new Date().toISOString().slice(0, 10);
+  s.byDay[day] = (s.byDay[day] || 0) + 1;
+  const keys = Object.keys(s.byDay).sort();
+  for (let i = 0; i < keys.length - 90; i++) delete s.byDay[keys[i]];
+  s.lastUpdated = new Date().toISOString();
+  writeScanStats(s);
+}
 
 app.use(cors());
 app.use(bodyParser.json({ limit: '20mb' }));
@@ -58,6 +97,30 @@ app.get('/proxy/health', (_req, res) => {
     regoloConfigured: Boolean(REGOLO_API_KEY),
     static: hasFrontend,
   });
+});
+
+/** Anonymous aggregate scan counts (no PHI). Resets if deploy volume is ephemeral. */
+app.post('/proxy/telemetry/scan', (req, res) => {
+  const outcome = req.body?.outcome;
+  if (outcome !== 'success' && outcome !== 'failure') {
+    return res.status(400).json({ error: 'expected { outcome: "success" | "failure" }' });
+  }
+  try {
+    recordScanEvent(outcome);
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[telemetry] record failed:', e?.message ?? e);
+    return res.status(500).json({ error: 'could not store stats' });
+  }
+});
+
+app.get('/proxy/telemetry/stats', (_req, res) => {
+  try {
+    res.json(readScanStats());
+  } catch (e) {
+    console.error('[telemetry] read failed:', e?.message ?? e);
+    res.status(500).json({ error: 'could not read stats' });
+  }
 });
 
 function logAttemptFailure(label, err, attempt) {

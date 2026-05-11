@@ -1752,6 +1752,80 @@ body {
   line-height: 1.55;
 }
 
+.bp-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.bp-form .btn-secondary {
+  margin-top: 0.25rem;
+}
+
+.bp-log-list {
+  list-style: none;
+  margin-top: 1rem;
+  max-height: 200px;
+  overflow-y: auto;
+  font-size: 0.84rem;
+  padding: 0;
+}
+
+.bp-log-list li {
+  padding: 0.45rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tools-stats-card {
+  margin-bottom: 1.25rem;
+}
+
+.scan-stats-summary {
+  font-size: 0.92rem;
+  margin-bottom: 0.75rem;
+  min-height: 1.5rem;
+}
+
+.scan-stats-ok {
+  color: var(--success);
+  font-weight: 600;
+}
+
+.scan-stats-bad {
+  color: var(--warning);
+  font-weight: 600;
+}
+
+.scan-stats-chart-wrap {
+  position: relative;
+  height: 220px;
+  margin-top: 0.5rem;
+}
+
+.ors-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 1rem;
+}
+
+.ors-col-title {
+  font-size: 0.78rem;
+  font-weight: 700;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.ors-steps {
+  margin: 0;
+  padding-inline-start: 1.2rem;
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.ors-steps li {
+  margin-bottom: 0.45rem;
+}
+
 .tools-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

@@ -12,8 +12,11 @@ import { PROMPTS } from './utils/prompts.js';
 import { normalizeMedication, aggregateCostStats } from './utils/prescriptionHelpers.js';
 import { HEALTH_FEED_ITEMS, renderHealthFeedCard, getProcessingFeedDateLineHtml } from './data/healthFeed.js';
 import { checkInteractions, getSeverityLevel } from './services/interactionService.js';
+import Chart from 'chart.js/auto';
 import { computeBmi, bmiCategory, PAKISTAN_HELPLINES } from './data/healthTools.js';
+import { ORS_STEPS_EN, ORS_STEPS_UR } from './data/orsGuide.js';
 import { buildWhatsAppSummaryText, openWhatsAppWithText } from './utils/shareAndSchedule.js';
+import { recordScanOutcome, fetchScanStats } from './services/telemetryApi.js';
 
 // ===== State =====
 let state = {
@@ -36,6 +39,73 @@ let state = {
 
 /** Cleared when leaving the processing screen */
 let processingFeedIntervalId = null;
+
+/** Tools page — Chart.js instance (destroyed on re-render) */
+let scanStatsChart = null;
+
+const BP_LOG_KEY = 'sehat_bp_log';
+
+function loadBpLog() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(BP_LOG_KEY) || '[]');
+    return Array.isArray(raw) ? raw : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBpLog(rows) {
+  localStorage.setItem(BP_LOG_KEY, JSON.stringify(rows.slice(0, 50)));
+}
+
+function mountScanStatsChart(stats) {
+  const canvas = document.getElementById('scanStatsChart');
+  if (!canvas) return;
+  if (scanStatsChart) {
+    scanStatsChart.destroy();
+    scanStatsChart = null;
+  }
+  const labels = Object.keys(stats.byDay || {})
+    .sort()
+    .slice(-14);
+  const values = labels.map((d) => Number(stats.byDay[d]) || 0);
+  scanStatsChart = new Chart(canvas.getContext('2d'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Scans',
+          data: values,
+          backgroundColor: 'rgba(37, 99, 235, 0.55)',
+          borderRadius: 6,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, ticks: { stepSize: 1 } },
+      },
+    },
+  });
+}
+
+async function refreshToolsScanStats() {
+  const el = document.getElementById('scanStatsSummary');
+  try {
+    const s = await fetchScanStats();
+    if (el) {
+      el.innerHTML = `<span class="scan-stats-line"><strong>${s.total}</strong> کل کوششیں / attempts · <span class="scan-stats-ok">${s.success}</span> کامیاب · <span class="scan-stats-bad">${s.failure}</span> نامکام</span>`;
+    }
+    mountScanStatsChart(s);
+  } catch (e) {
+    if (el) el.textContent = 'شماریات لوڈ نہیں ہویں — کیا پراکسی چل رہی ہے؟';
+    console.warn('[stats]', e);
+  }
+}
 
 const HACKATHON_CREDIT_HTML = `
   <div class="hackathon-banner" role="note">
@@ -597,13 +667,30 @@ function renderTools() {
     (h) =>
       `<tr><td><strong>${escapeHtml(h.dial)}</strong></td><td>${escapeHtml(h.en)}</td><td dir="rtl">${escapeHtml(h.ur)}</td></tr>`
   ).join('');
+  const bpRows = loadBpLog();
+  const bpListHtml =
+    bpRows.length === 0
+      ? `<li class="tools-muted">ابھی کوئی ریکارڈ نہیں — اوپر درج کریں</li>`
+      : bpRows
+          .map(
+            (r) =>
+              `<li><strong>${escapeHtml(r.date)}</strong> — ${escapeHtml(r.sys)}/${escapeHtml(r.dia)} mmHg${r.note ? ` <span class="tools-muted">(${escapeHtml(r.note)})</span>` : ''}</li>`
+          )
+          .join('');
+
   app.innerHTML = `
     ${renderHeader()}
     <div class="container tools-page">
       <section class="tools-section">
         <div class="tools-head">
           <h2 class="tools-title">صحت کے ٹولز</h2>
-          <p class="tools-lead">BMI کیلکولیٹر اور کچھ عوامی ہیلپ لائن نمبر — نسخے کے علاوہ مفید معلومات۔</p>
+          <p class="tools-lead">BMI، بلڈ پریشر کا مقامی نوٹ، ORS کی ترکیب، عوامی ہیلپ لائن، اور اس سرور پر نسخہ اسکین کی سادہ شماریات۔</p>
+        </div>
+        <div class="tools-stats-card tools-card">
+          <h3 class="tools-card__h">📊 نسخہ اسکین — شماریات (یہ سرور)</h3>
+          <p class="tools-muted">کوئی تصویر یا مریض کا نام نہیں جاتا — ہر مکمل یا ناکام کوشش کی ایک گنتی۔ کلاؤڈ پر بعض ہوسٹس پر ڈیٹا ری سیٹ ہو سکتا ہے۔</p>
+          <div id="scanStatsSummary" class="scan-stats-summary" role="status" aria-live="polite">لوڈ ہو رہا ہے…</div>
+          <div class="scan-stats-chart-wrap"><canvas id="scanStatsChart" aria-label="Scans per day chart"></canvas></div>
         </div>
         <div class="tools-grid">
           <div class="tools-card">
@@ -621,6 +708,41 @@ function renderTools() {
               <button type="button" class="btn btn-primary" id="bmiCalcBtn">حساب / Calculate BMI</button>
             </div>
             <div class="bmi-result" id="bmiResult" role="status" aria-live="polite"></div>
+          </div>
+          <div class="tools-card">
+            <h3 class="tools-card__h">بلڈ پریشر — مقامی نوٹ</h3>
+            <p class="tools-muted">صرف اس براؤزر میں محفوظ — ڈاکٹر کو دکھانے کے لیے کوپی کریں۔ علاج نہیں۔</p>
+            <div class="bp-form">
+              <div class="form-group">
+                <label for="bpSys">سسٹولک / Systolic</label>
+                <input type="number" class="form-input" id="bpSys" min="60" max="250" placeholder="مثلاً 120" />
+              </div>
+              <div class="form-group">
+                <label for="bpDia">ڈائسٹولک / Diastolic</label>
+                <input type="number" class="form-input" id="bpDia" min="40" max="180" placeholder="مثلاً 80" />
+              </div>
+              <div class="form-group">
+                <label for="bpNote">نوٹ (اختیاری)</label>
+                <input type="text" class="form-input" id="bpNote" placeholder="مثلاً صبح، دوا کے بعد" />
+              </div>
+              <button type="button" class="btn btn-primary" id="bpAddBtn">داخل کریں / Add reading</button>
+              <button type="button" class="btn btn-secondary" id="bpClearBtn">صاف / Clear all</button>
+            </div>
+            <ul class="bp-log-list" id="bpLogList">${bpListHtml}</ul>
+          </div>
+          <div class="tools-card">
+            <h3 class="tools-card__h">ORS — oral rehydration</h3>
+            <p class="tools-muted">سخت دست یا الٹیاں ہوں تو فوری ڈاکٹر؛ یہ عام ہدایات ہیں۔ WHO پیکٹ کے مطابق ایک لیٹر کی مثال۔</p>
+            <div class="ors-columns">
+              <div dir="rtl">
+                <div class="ors-col-title">اردو</div>
+                <ol class="ors-steps">${ORS_STEPS_UR.map((x, i) => `<li>${escapeHtml(x)}</li>`).join('')}</ol>
+              </div>
+              <div>
+                <div class="ors-col-title">English</div>
+                <ol class="ors-steps">${ORS_STEPS_EN.map((x, i) => `<li>${escapeHtml(x)}</li>`).join('')}</ol>
+              </div>
+            </div>
           </div>
           <div class="tools-card">
             <h3 class="tools-card__h">ہیلپ لائن (تصدیق کریں)</h3>
@@ -664,6 +786,44 @@ function renderTools() {
     }
     el.innerHTML = `<strong>BMI: ${escapeHtml(String(bmi))}</strong> — ${escapeHtml(cat.en)} / <span dir="rtl">${escapeHtml(cat.ur)}</span>`;
   });
+
+  function renderBpListUi() {
+    const ul = document.getElementById('bpLogList');
+    if (!ul) return;
+    const rows = loadBpLog();
+    ul.innerHTML =
+      rows.length === 0
+        ? `<li class="tools-muted">ابھی کوئی ریکارڈ نہیں — اوپر درج کریں</li>`
+        : rows
+            .map(
+              (r) =>
+                `<li><strong>${escapeHtml(r.date)}</strong> — ${escapeHtml(r.sys)}/${escapeHtml(r.dia)} mmHg${r.note ? ` <span class="tools-muted">(${escapeHtml(r.note)})</span>` : ''}</li>`
+            )
+            .join('');
+  }
+
+  document.getElementById('bpAddBtn').addEventListener('click', () => {
+    const sys = parseInt(String(document.getElementById('bpSys').value).trim(), 10);
+    const dia = parseInt(String(document.getElementById('bpDia').value).trim(), 10);
+    const note = String(document.getElementById('bpNote').value).trim();
+    if (!Number.isFinite(sys) || !Number.isFinite(dia)) {
+      alert('سسٹولک اور ڈائسٹولک نمبر درج کریں۔');
+      return;
+    }
+    const rows = [{ date: new Date().toISOString().slice(0, 16).replace('T', ' '), sys: String(sys), dia: String(dia), note }, ...loadBpLog()];
+    saveBpLog(rows);
+    document.getElementById('bpSys').value = '';
+    document.getElementById('bpDia').value = '';
+    document.getElementById('bpNote').value = '';
+    renderBpListUi();
+  });
+  document.getElementById('bpClearBtn').addEventListener('click', () => {
+    if (!confirm('تمام BP اندراجات مٹادیں؟')) return;
+    saveBpLog([]);
+    renderBpListUi();
+  });
+
+  void refreshToolsScanStats();
 }
 
 /** Quick-read list from existing med fields only — no extra model calls. */
@@ -1181,9 +1341,11 @@ SYSTEM CANDIDATES (fuzzy matches from Pakistani medicine DB — spelling hints O
     }
 
     state.view = 'results';
+    void recordScanOutcome('success');
     render();
   } catch (error) {
     console.error('Analysis failed:', error);
+    void recordScanOutcome('failure');
     alert('Analysis failed: ' + error.message);
     state.view = 'uploading';
     render();
