@@ -15,7 +15,13 @@ import { checkInteractions, getSeverityLevel } from './services/interactionServi
 import Chart from 'chart.js/auto';
 import { computeBmi, bmiCategory, PAKISTAN_HELPLINES } from './data/healthTools.js';
 import { ORS_STEPS_EN, ORS_STEPS_UR } from './data/orsGuide.js';
+import {
+  ORS_BRAND_NOTES,
+  SEEK_CARE_GUIDANCE,
+  OPEN_HEALTH_LINKS,
+} from './data/pakistanHealthResources.js';
 import { buildWhatsAppSummaryText, openWhatsAppWithText } from './utils/shareAndSchedule.js';
+import { downloadFhirBundle } from './utils/fhirExport.js';
 import { recordScanOutcome, fetchScanStats } from './services/telemetryApi.js';
 
 // ===== State =====
@@ -595,6 +601,9 @@ function renderResults() {
             <button type="button" class="btn btn-secondary" id="shareWhatsappBtn" style="width:auto" ${state.medications.length ? '' : 'disabled'} title="Share summary on WhatsApp">
               📲 WhatsApp
             </button>
+            <button type="button" class="btn btn-secondary" id="downloadFhirBtn" style="width:auto" ${state.medications.length ? '' : 'disabled'} title="FHIR R4 JSON for interoperability demos">
+              📄 FHIR JSON
+            </button>
             <button type="button" class="btn btn-secondary" id="newScanBtn" style="width:auto">New Scan</button>
           </div>
         </div>
@@ -684,7 +693,7 @@ function renderTools() {
       <section class="tools-section">
         <div class="tools-head">
           <h2 class="tools-title">صحت کے ٹولز</h2>
-          <p class="tools-lead">BMI، بلڈ پریشر کا مقامی نوٹ، ORS کی ترکیب، عوامی ہیلپ لائن، اور اس سرور پر نسخہ اسکین کی سادہ شماریات۔</p>
+          <p class="tools-lead">BMI، BP نوٹ، ORS، عوامی ہیلپ لائن، پاکستان تناظر میں معلومات، اور اس سرور پر اسکین شماریات۔ نتائج سے FHIR JSON بھی نکال سکتے ہیں۔</p>
         </div>
         <div class="tools-stats-card tools-card">
           <h3 class="tools-card__h">📊 نسخہ اسکین — شماریات (یہ سرور)</h3>
@@ -692,6 +701,7 @@ function renderTools() {
           <div id="scanStatsSummary" class="scan-stats-summary" role="status" aria-live="polite">لوڈ ہو رہا ہے…</div>
           <div class="scan-stats-chart-wrap"><canvas id="scanStatsChart" aria-label="Scans per day chart"></canvas></div>
         </div>
+        ${renderPakistanResourcesToolsHtml()}
         <div class="tools-grid">
           <div class="tools-card">
             <h3 class="tools-card__h">BMI — وزن اور قد</h3>
@@ -824,6 +834,36 @@ function renderTools() {
   });
 
   void refreshToolsScanStats();
+}
+
+/** Curated Pakistan + open-health references — static copy only. */
+function renderPakistanResourcesToolsHtml() {
+  const careLines = SEEK_CARE_GUIDANCE.map(
+    (row) =>
+      `<li class="pk-care-line"><span dir="rtl">${escapeHtml(row.ur)}</span><span class="pk-care-en">${escapeHtml(row.en)}</span></li>`
+  ).join('');
+  const links = OPEN_HEALTH_LINKS.map(
+    (L) =>
+      `<li><a href="${escapeHtml(L.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(L.labelUr)}</a> — <span class="tools-muted">${escapeHtml(L.label)}</span></li>`
+  ).join('');
+  return `
+    <div class="tools-card pk-resources-card">
+      <h3 class="tools-card__h">🇵🇰 عوامی صحت اور کھلے معیار — معلومات</h3>
+      <p class="tools-muted">یہ تعلیمی مواد ہے؛ ہنگامی نمبر اور سہولتیں مقام اور وقت کے مطابق تصدیق کریں۔</p>
+      <div class="pk-ors-note">
+        <div class="ors-col-title">ORS برانڈ / ORS brands</div>
+        <p class="tools-muted" dir="rtl">${escapeHtml(ORS_BRAND_NOTES.ur)}</p>
+        <p class="tools-muted">${escapeHtml(ORS_BRAND_NOTES.en)}</p>
+      </div>
+      <div class="pk-care-block">
+        <div class="ors-col-title">کہاں رجوع کریں / Where to seek care</div>
+        <ul class="pk-care-list">${careLines}</ul>
+      </div>
+      <div class="pk-links-block">
+        <div class="ors-col-title">کھلے معیار اور حوالہ سائٹس</div>
+        <ul class="pk-resource-links-list">${links}</ul>
+      </div>
+    </div>`;
 }
 
 /** Quick-read list from existing med fields only — no extra model calls. */
@@ -1141,6 +1181,11 @@ function setupResultEvents() {
       const text = buildWhatsAppSummaryText(state.medications, state.interactions);
       openWhatsAppWithText(text);
     });
+  }
+
+  const fhirBtn = document.getElementById('downloadFhirBtn');
+  if (fhirBtn && !fhirBtn.disabled) {
+    fhirBtn.addEventListener('click', () => downloadFhirBundle(state.medications));
   }
 
   document.getElementById('newScanBtn').addEventListener('click', () => {

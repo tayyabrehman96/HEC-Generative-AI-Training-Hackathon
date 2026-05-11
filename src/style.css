@@ -1826,6 +1826,59 @@ body {
   margin-bottom: 0.45rem;
 }
 
+.pk-resources-card {
+  margin-bottom: 1.25rem;
+}
+
+.pk-ors-note,
+.pk-care-block,
+.pk-links-block {
+  margin-top: 1rem;
+}
+
+.pk-care-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+
+.pk-care-line {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.55rem 0.65rem;
+  background: var(--bg-alt);
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.pk-care-en {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.pk-resource-links-list {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+  font-size: 0.84rem;
+  line-height: 1.55;
+}
+
+.pk-resource-links-list li {
+  margin-bottom: 0.5rem;
+}
+
+.pk-resource-links-list a {
+  color: var(--secondary);
+  font-weight: 600;
+}
+
 .tools-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
